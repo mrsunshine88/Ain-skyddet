@@ -8,6 +8,7 @@ import { initLogic } from './app_logic.js';
 let brain, vision, audio;
 let ui = {};
 
+window.isOllamaBusy = false;
 window.isThinking = false;
 window.activeTimers = [];
 window.lastInteractionTime = Date.now();
@@ -29,6 +30,11 @@ window.vaktMode = false;
 
 // --- INIT ---
 async function init() {
+    if (window.jarvisInitialized) {
+        console.log("[INIT] Systemet är redan aktivt. Avbryter dubbelinitiering.");
+        return;
+    }
+    window.jarvisInitialized = true;
     console.log("JARVIS vaknar...");
     
     const session = JSON.parse(localStorage.getItem('jarvis_session'));
@@ -113,7 +119,7 @@ async function init() {
 
     // Starta loopar
     setInterval(updateDigitalContext, 10000);
-    setInterval(window.internalThoughtLoop, 60000);
+    setInterval(window.internalThoughtLoop, 600000);
     setInterval(checkDreamState, 60000);
     setInterval(timeCheckLoop, 60000);
     setInterval(accumulateSittingTime, 10000);
@@ -123,9 +129,12 @@ async function init() {
 }
 
 window.checkOllama = async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 sekunders timeout för hälsa
+
     try {
-        console.log(`[HÄLSA] Kontrollerar AI-anslutning...`);
-        const res = await fetch('http://127.0.0.1:11434/api/tags');
+        const res = await fetch('http://127.0.0.1:11434/api/tags', { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
         
         const data = await res.json();
@@ -134,16 +143,20 @@ window.checkOllama = async () => {
         
         if (ui.pillText) {
             ui.pillText.innerText = `JARVIS ONLINE (${window.brainModel.toUpperCase()})`;
-            ui.pillText.style.display = 'block';
-            ui.pillText.parentElement.style.borderColor = "#00f2ff";
-            ui.pillText.parentElement.style.opacity = "1";
+            ui.pillText.style.borderColor = "#00f2ff";
+            ui.pillText.style.opacity = "1";
         }
     } catch (e) { 
-        console.error("[HÄLSA] Ollama ej tillgänglig.");
+        clearTimeout(timeoutId);
+        // Om AI:n är upptagen (Thinking) så är det inte en störning, bara belastning.
         if (ui.pillText) {
-            ui.pillText.innerText = "JARVIS (OFFLINE-LÄGE)";
-            ui.pillText.style.display = 'block';
-            ui.pillText.parentElement.style.borderColor = "#f43f5e";
+            if (window.isThinking) {
+                ui.pillText.innerText = "JARVIS (ARBETAR...)";
+                ui.pillText.style.borderColor = "#eab308";
+            } else {
+                ui.pillText.innerText = "JARVIS (ANSLUTER...)";
+                ui.pillText.style.borderColor = "#f43f5e";
+            }
         }
     }
 };

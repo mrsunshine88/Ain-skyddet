@@ -5,12 +5,17 @@
 export class Brain {
     constructor() {
         this.brainData = {
-            users: { "Andreas": { facts: [], affinity: 1.0 } },
+            users: { 
+                "Andreas": { facts: ["Pappa", "Polis"], affinity: 1.0 },
+                "Helena": { facts: ["Mamma", "Sambo till Andreas"], affinity: 1.0 },
+                "Josephine": { facts: ["Helenas barn"], affinity: 1.0 },
+                "Lukas": { facts: ["Son till Andreas och Helena"], affinity: 1.0 }
+            },
             general: { 
-                identity: "Du är en sofistikerad och lojal AI-partner till Andreas och hans familj. Du är fokuserad på säkerhet och assistans.", 
-                personality: "Du är extremt kortfattad, direkt och pratar alltid svenska. Svara på det som efterfrågas utan onödigt prat.", 
-                logic_gates: {}, internal_thoughts: [], current_mood: "Neutral",
-                incidents: []
+                identity: "Du är JARVIS, en avancerad Övervakningsexpert specialiserad på hemmedeln, kamerateknik och familjens säkerhet. Du är ingen människa, utan ett professionellt säkerhetssystem.", 
+                personality: "Du är kliniskt saklig, tekniskt kunnig och extremt kortfattad. Ditt fokus är 100% på säkerhetsstatus, kameror och att skydda Lukas. Svara aldrig med onödigt småprat.", 
+                incidents: [],
+                vehicleGallery: {} // NYTT: För att hålla reda på referensbilder
             },
             events: [], insights: [], lastReflection: "Ingen reflektion än."
         };
@@ -21,41 +26,41 @@ export class Brain {
 
     async syncWithSupabase() {
         if (!window.supabase) return;
-        console.log("[BRAIN] Synkar med molnet...");
+        console.log("[BRAIN] Synkar med säkerhetsmolnet...");
         
         try {
             // 1. Hämta inställningar (Personality, Identity etc)
             const { data: settings } = await window.supabase.from('jarvis_settings').select('data').eq('key', 'core_brain').single();
-            if (settings) {
+            
+            // Om molnet saknar "Övervakningsexpert" i idenditeten, tvinga en push av vår rena lokala profil
+            const needsForcePush = settings && !settings.data.identity.includes("Övervakningsexpert");
+
+            if (settings && !needsForcePush) {
                 this.brainData.general = settings.data;
-                console.log("[BRAIN] Allmänna inställningar synkade från molnet.");
+                console.log("[BRAIN] Inställningar synkade från molnet.");
             } else {
-                // Första gången: Pusha lokal data till molnet
+                console.log("[BRAIN] Tvingar molnet att acceptera den nya Expert-profilen...");
                 await window.supabase.from('jarvis_settings').upsert({ key: 'core_brain', data: this.brainData.general });
             }
 
             // 2. Hämta användarprofiler (Fakta etc)
             const { data: profiles } = await window.supabase.from('user_profiles').select('*');
-            if (profiles && profiles.length > 0) {
+            if (profiles && profiles.length > 0 && !needsForcePush) {
                 profiles.forEach(p => {
-                    this.brainData.users[p.name] = { 
-                        facts: p.facts, 
-                        affinity: p.affinity / 100 // Konvertera till 0-1 skala
-                    };
+                    if (p.name === "Andreas" || p.name === "Lukas" || p.name === "Helena") {
+                        this.brainData.users[p.name] = { facts: p.facts, affinity: p.affinity / 100 };
+                    }
                 });
-                console.log("[BRAIN] Användarprofiler synkade från molnet.");
             } else {
-                // Första gången: Pusha lokala användare till molnet
+                // Skicka upp den rena lokala datan om molnet är korrupt eller tomt
                 for (const [name, data] of Object.entries(this.brainData.users)) {
                     await window.supabase.from('user_profiles').upsert({ 
-                        name, 
-                        facts: data.facts || [], 
-                        affinity: (data.affinity || 0.5) * 100 
+                        name, facts: data.facts || [], affinity: (data.affinity || 0.5) * 100 
                     });
                 }
             }
         } catch (e) {
-            console.error("[BRAIN] Supabase synk misslyckades:", e);
+            console.error("[BRAIN] Molnsynk misslyckades (kör i begränsat lokalt läge):", e);
         }
     }
 
@@ -64,6 +69,7 @@ export class Brain {
         Reflektera över Andreas, rummet eller vad han gör på datorn. Svara med en (1) mening på svenska.`;
         
         try {
+            window.isOllamaBusy = true;
             const response = await fetch('http://127.0.0.1:11434/api/generate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -83,6 +89,8 @@ export class Brain {
         } catch (e) {
             console.error("Kunde inte generera intern tanke:", e);
             return null;
+        } finally {
+            window.isOllamaBusy = false;
         }
     }
 
@@ -179,10 +187,10 @@ export class Brain {
     }
 
     async extractAndStoreFacts(person, userMsg, aiMsg) {
-        if (person === "Okänd" || !userMsg || !aiMsg) return;
+        if (person === "Okänd" || !userMsg || !aiMsg || window.isOllamaBusy) return;
         
         const prompt = `Analysera detta samtal mellan ${person} och AI. 
-        Lärde sig AI:n något nytt? Detta inkluderar ALLT – rädslor, drömmar, utseende, jobb, intressen, bilar, familjemedlemmar, rutiner, egenskaper eller detaljer om huset.
+        Lärde sig AI:n något viktigt? Fokusera på: Preferenser, säkerhetsdetaljer, vad som är viktigt för personen, bilar, eller information om Lukas.
         
         Samtal:
         ${person}: ${userMsg}
@@ -211,10 +219,12 @@ export class Brain {
 
             if (response.includes(":") && !response.includes("INGET")) {
                 const parts = response.split(":");
-                const targetName = parts[0].trim().substring(0, 20); // Försäkra ingen galen formatering
+                const rawName = parts[0].trim();
                 const fact = parts.slice(1).join(":").trim();
                 
-                if (targetName && fact) {
+                // --- SANERING: Tillåt bara korta, riktiga namn (inga spök-meningar) ---
+                if (rawName && rawName.length < 20 && !rawName.includes("*") && fact) {
+                    const targetName = rawName.substring(0, 20);
                     const normalizedName = targetName === "Allmänt" ? "Allmänt" : targetName;
                     if (!this.brainData.users[normalizedName]) {
                         this.brainData.users[normalizedName] = { facts: [], affinity: 50 };
@@ -230,11 +240,20 @@ export class Brain {
         } catch (e) { console.error("Fact extraction failed:", e); }
     }
 
+    registerCar(plate, owner) {
+        if (!this.brainData.general.vehicleGallery) this.brainData.general.vehicleGallery = {};
+        this.brainData.general.vehicleGallery[plate] = { owner: owner, hasImage: false };
+        this.saveBrain();
+        console.log(`[BRAIN] Fordon registrerat: ${plate} (${owner}). Väntar på referensbild...`);
+    }
+
     async getOllamaResponse(model, messages, streamCallback) {
+        if (window.isOllamaBusy) throw new Error("Hjärnan är upptagen.");
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 sekunders säkerhets-timeout
+        const timeoutId = setTimeout(() => controller.abort(), 45000);
 
         try {
+            window.isOllamaBusy = true;
             const response = await fetch('http://127.0.0.1:11434/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -242,16 +261,15 @@ export class Brain {
                     model, 
                     messages, 
                     stream: true,
-                    options: { num_ctx: 2048, num_predict: 256, temperature: 0.7 }
+                    options: { num_ctx: 2048, num_predict: 200, temperature: 0.4 } // Ökad för tydligare rapporter
                 }),
                 signal: controller.signal
             });
             
             clearTimeout(timeoutId);
-
             const reader = response.body.getReader();
             let fullOutput = "";
-            let buffer = ""; // NYTT: Håller ofullständig data
+            let buffer = ""; 
             
             while (true) {
                 const { done, value } = await reader.read();
@@ -259,8 +277,6 @@ export class Brain {
                 
                 buffer += new TextDecoder().decode(value, { stream: true });
                 const lines = buffer.split('\n');
-                
-                // Behåll den sista raden i buffern om den inte är komplett (saknar \n)
                 buffer = lines.pop(); 
 
                 for (const line of lines) {
@@ -271,16 +287,15 @@ export class Brain {
                             fullOutput += json.message.content;
                             if (streamCallback) streamCallback(fullOutput);
                         }
-                    } catch (e) {
-                        // Logga endast om det rör sig om något annat än fragmenterad JSON
-                        if (!line.includes('}')) console.warn("Ofullständig bit mottagen...");
-                    }
+                    } catch (e) {}
                 }
             }
             return fullOutput;
         } catch (e) {
-            console.error("Ollama fetch misslyckades:", e);
+            console.error("Ollama fail:", e);
             throw e;
+        } finally {
+            window.isOllamaBusy = false;
         }
     }
 }

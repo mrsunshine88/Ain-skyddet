@@ -91,8 +91,24 @@
         .button-row { padding: 0 15px 15px 15px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
         .btn-action { background: var(--accent); border: none; color: #000; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; flex: 2; transition: all 0.2s; box-shadow: 0 4px 12px rgba(0, 242, 255, 0.3); text-transform: uppercase; font-size: 11px; }
         .btn-outline { background: transparent; border: 1px solid var(--accent); color: var(--accent); padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 10px; text-transform: uppercase; transition: all 0.3s ease; white-space: nowrap; }
-        .btn-outline.active { background: rgba(0, 242, 255, 0.15); box-shadow: 0 0 20px var(--accent); color: #fff; font-weight: bold; }
-        #btnLukas.active { background: rgba(244, 63, 94, 0.2) !important; border-color: #f43f5e !important; color: #fff !important; box-shadow: 0 0 30px rgba(244, 63, 94, 0.6) !important; animation: lukasPulse 2s infinite; }
+        .btn-outline.active { 
+            background: var(--accent-dim) !important; 
+            border-color: var(--accent) !important; 
+            color: #fff !important; 
+            box-shadow: 0 0 25px var(--accent), inset 0 0 15px var(--accent-dim) !important; 
+            text-shadow: 0 0 8px #fff; 
+            font-weight: 900 !important;
+            transform: translateY(-2px);
+        }
+        #btnLukas.active { 
+            background: rgba(244, 63, 94, 0.3) !important; 
+            border-color: #f43f5e !important; 
+            color: #fff !important; 
+            box-shadow: 0 0 35px rgba(244, 63, 94, 0.7) !important; 
+            animation: lukasPulse 2s infinite; 
+            text-shadow: 0 0 8px #fff;
+            font-weight: 900 !important;
+        }
         @keyframes lukasPulse { 0% { box-shadow: 0 0 20px rgba(244, 63, 94, 0.4); } 50% { box-shadow: 0 0 40px rgba(244, 63, 94, 0.8); } 100% { box-shadow: 0 0 20px rgba(244, 63, 94, 0.4); } }
 
         @keyframes breath {

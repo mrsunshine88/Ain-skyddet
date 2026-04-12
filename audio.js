@@ -13,16 +13,29 @@ export class AudioHandler {
 
     async initSTT(onStatusUpdate) {
         try {
+            // Försök ladda Whisper (Xenova)
             const transformers = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
             const { pipeline, env } = transformers;
             env.allowLocalModels = false;
             this.transcriber = await pipeline('speech-to-text', 'Xenova/whisper-tiny');
             onStatusUpdate("Hörsel redo");
+            this.sttMethod = "whisper";
             return true;
         } catch (e) {
-            console.error("Kunde inte ladda Whisper:", e);
-            onStatusUpdate("Hörsel-fel");
-            return false;
+            console.warn("Whisper misslyckades, växlar till Web Speech API...");
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                this.recognizer = new SpeechRecognition();
+                this.recognizer.lang = 'sv-SE';
+                this.recognizer.continuous = false;
+                this.recognizer.interimResults = false;
+                this.sttMethod = "webspeech";
+                onStatusUpdate("Hörsel redo (Standard)");
+                return true;
+            } else {
+                onStatusUpdate("Hörsel-fel");
+                return false;
+            }
         }
     }
 
@@ -65,7 +78,17 @@ export class AudioHandler {
         return this.currentVolume || 0;
     }
 
-    startCapture(onStart) {
+    startCapture(onStart, onText) {
+        if (this.sttMethod === "webspeech" && this.recognizer) {
+            this.recognizer.onresult = (event) => {
+                const text = event.results[0][0].transcript;
+                if (onText) onText(text);
+            };
+            this.recognizer.onstart = () => { if (onStart) onStart(); };
+            this.recognizer.start();
+            return;
+        }
+
         if (this.audioContext && this.audioContext.state === 'suspended') {
             this.audioContext.resume();
         }

@@ -93,16 +93,16 @@ export class Vision {
     // --- NYTT: FÖRSTÄRK MÖRKERBILDER ---
     enhanceNightImage(ctx, width, height) {
         const brightness = this.getBrightness();
-        if (brightness < 80) { // Lite högre tröskel för att vara på säkra sidan
-            // NYTT: Ännu kraftigare boost för att motverka "nattblindhet"
-            ctx.filter = 'contrast(1.8) brightness(1.4) saturate(1.2)';
+        if (brightness < 80) {
+            // Justerad till 1.2 för att eliminera digitalt brus enligt instruktion
+            ctx.filter = 'contrast(1.2) brightness(1.2)';
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = width;
             tempCanvas.height = height;
             tempCanvas.getContext('2d').drawImage(this.canvas, 0, 0);
             ctx.filter = 'none';
             ctx.drawImage(tempCanvas, 0, 0);
-            console.log(`[Vision] Aggressiv natt-boost (Ljusstyrka: ${brightness})`);
+            console.log(`[Vision] Natt-optimering (Ljusstyrka: ${brightness})`);
         }
     }
 
@@ -215,13 +215,18 @@ export class Vision {
     // --- NYTT: BURST-REGISTRERING (10 foton) ---
     async registerFaceBurst(name, onProgress) {
         let successCount = 0;
-        for (let i = 0; i < 10; i++) {
+        const source = this.video || document.querySelector('video');
+        
+        for (let i = 0; i < 5; i++) {
             if (onProgress) onProgress(i + 1);
-            const ok = await this.registerFace(name);
-            if (ok) successCount++;
-            await new Promise(r => setTimeout(r, 300)); // 300ms mellanrum
+            const snap = await this.captureSnapshot(source);
+            if (snap) {
+                const ok = await this.registerFace(snap, name);
+                if (ok) successCount++;
+            }
+            await new Promise(r => setTimeout(r, 600)); // 600ms mellanrum för att få olika vinklar
         }
-        return successCount > 0;
+        return successCount >= 3; // Kräver minst 3 lyckade bilder
     }
 
     // --- NYTT: AKTIVT ANSIKTSMINNE ---
@@ -364,7 +369,7 @@ export class Vision {
         // Ögonblicksbilder får också natt-boost om det behövs
         const brightness = this.getBrightnessFromCanvas(off);
         if (brightness < 80) {
-            ctx.filter = 'contrast(1.6) brightness(1.3)';
+            ctx.filter = 'contrast(1.2) brightness(1.2)';
             ctx.drawImage(off, 0, 0);
             ctx.filter = 'none';
         }
@@ -463,19 +468,32 @@ export class Vision {
     }
 
     async analyzeIntruder(base64Image, label) {
-        if (!base64Image) return { description: "", classification: "Okänd", action: "" };
+        if (!base64Image) return { description: "", classification: "Okänd", threatLevel: 1 };
         try {
             const rawBase64 = base64Image.replace(/^data:image\/jpeg;base64,/, "");
             
-            // SUPER-PROMPT för naturlig men saklig rapport
-            const prompt = `Analysera bilden som Andreas personliga säkerhetsassistent.
+            // Anpassad prompt baserat på objektstyp
+            let focusArea = label === "person" ? "Kläder, ansikte och föremål i händerna." : "Färg, typ (SUV/Sedan) och märke om möjligt.";
+            
+            const prompt = `Du är en kliniskt saklig säkerhetsexpert.
             Detekterat objekt: ${label}.
             
-            UPPGIFT: Beskriv kortfattat vad du ser på ett naturligt mänskligt sätt (ingen formatering, inga **). 
-            Fokusera på: Klädsel, färger och om personen ser bekant eller misstänkt ut.
-            Svara på SVENSKA. Max 15 ord.
+            FAMILJENS BILAR: 
+            1. Andreas silvriga Volvo S70 (MJN072) - står oftast på grusplanen.
+            2. Helenas Volvo V70 (NUF786).
             
-            AVSLUTA MED EN TAG PÅ NY RAD: [HOT: LÅG/MEDEL/HÖG] [TYP: VUXEN/BARN/FORDON]`;
+            INSTRUKTION: 
+            - Om du INTE ser ett fordon eller en person, svara ENDAST: "Ingen bil eller person i sikte".
+            - Om du är det minsta osäker på om ett objekt faktiskt är en person eller bil, svara att det är "Otydligt" istället för att gissa. Säg INTE att det är en person om du inte ser tydliga mänskliga drag.
+            - IGNORERA trädgårdsmöbler, stolar och bord. Fokusera 100% på fordon och personer.
+            - Om fordonet liknar någon av ovanstående bilar och står på sin vanliga plats, svara ENDAST: "Identifierad: [BILNAMN]".
+            - Om det är en annan/okänd bil, beskriv den noga som "OKÄND BIL".
+            - Svara kort på SVENSKA. Max 10 ord.
+            - Gissa aldrig färg om det är kolsvart, men nämn om fordonet är ljust eller mörkt.
+            
+            Fokus: ${focusArea}
+            
+            AVSLUTA MED EN TAG: [HOT: LÅG/MEDEL/HÖG] [TYP: VUXEN/BARN/FORDON]`;
             
             const res = await fetch('http://127.0.0.1:11434/api/chat', {
                 method: 'POST',
@@ -484,8 +502,9 @@ export class Vision {
                     model: this.visionModel,
                     messages: [
                         { role: 'system', content: prompt },
-                        { role: 'user', content: "Beskriv bilden.", images: [rawBase64] }
+                        { role: 'user', content: "Statusrapport för bilden.", images: [rawBase64] }
                     ],
+                    options: { num_predict: 50, temperature: 0.1 }, // Låg temp för mindre "kreativitet" (gissningar)
                     stream: false
                 })
             });
@@ -493,14 +512,11 @@ export class Vision {
             const content = data.message?.content || "";
             
             // Extrahering för intelligenta beslut
-            let classification = "Människa";
+            let classification = label === "person" ? "Människa" : "Fordon";
             let threatLevel = 1;
 
             if (content.toLowerCase().includes("barn")) classification = "Barn";
-            if (label === "car" || label === "truck") classification = "Fordon";
-            
-            // Hot-nivå estimering från AI:ns svar
-            if (content.toUpperCase().includes("HOT: HÖG") || content.toLowerCase().includes("kofot") || content.toLowerCase().includes("maskerad")) threatLevel = 3;
+            if (content.toUpperCase().includes("HOT: HÖG")) threatLevel = 3;
             else if (content.toUpperCase().includes("HOT: MEDEL")) threatLevel = 2;
 
             return {
@@ -511,7 +527,7 @@ export class Vision {
             };
         } catch (e) {
             console.error("VLM-Beskrivning misslyckades:", e);
-            return { description: "Kunde inte analysera bilden.", classification: "Okänd", threatLevel: 1 };
+            return { description: "Analys misslyckades.", classification: "Okänd", threatLevel: 1 };
         }
     }
 

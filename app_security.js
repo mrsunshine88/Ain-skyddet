@@ -5,15 +5,33 @@
 export function initSecurity(ui, vision, audio, brain) {
     console.log("[SECURITY] Modul laddad.");
 
+    const fs = require('fs');
+    
     const zoneNames = ["Ytterdörren", "Infarten", "Garaget"];
     const zoneSequence = { "Vägen": 0, "Infarten": 1, "Garaget": 2, "Ytterdörren": 3 };
     window.lastAlerts = {};
+    window.lastSentMessage = "";
     window.roadPassages = 0;
+
+    // --- [CHECK] LADDA SPARADE POSITIONER FRÅN FIL ---
+    try {
+        if (fs.existsSync('tracker.json')) {
+            window.movementTracker = JSON.parse(fs.readFileSync('tracker.json', 'utf8'));
+            console.log("[SECURITY] Rörelse-minne laddat från fil.");
+        } else {
+            window.movementTracker = {};
+        }
+    } catch (e) {
+        window.movementTracker = {};
+    }
 
     window.startSecurityLoop = () => {
         console.log("Säkerhetsmatris laddad. Väntar på Vaktläge...");
         
         setInterval(async () => {
+            // Prioritet 1: Global AI-spärr för att spara GPU (100%-fixen)
+            if (window.isOllamaBusy || window.isThinking || window.isAnalyzingIntruder) return;
+
             const isVaktActive = window.vaktMode || window.isSleeping || !window.isHome;
             
             ui.extCams.forEach(async (cam, idx) => {
@@ -51,50 +69,86 @@ export function initSecurity(ui, vision, audio, brain) {
                 // 2. SYN & OBJEKT
                 const objects = await vision.detectObjects(cam);
                 const targets = ["person", "car", "truck", "motorcycle"];
-                let found = objects.filter(o => targets.includes(o.label) && o.confidence > (isVaktActive ? 0.35 : 0.45));
+                // Höjt tröskelvärde till 0.75 / 0.80 för att vara extremt restriktiv (enligt instruktion)
+                let found = objects.filter(o => targets.includes(o.label) && o.confidence > (isVaktActive ? 0.75 : 0.80));
 
                 if (found.length > 0) {
-                    const primaryObj = found[0].label;
-                    const isCar = ["car", "truck", "motorcycle"].includes(primaryObj);
-                    const trackerId = `track_${primaryObj}`;
+                    const currentObj = found[0];
+                    const primaryObj = currentObj.label;
+                    const trackerId = `track_${zone}_${primaryObj}`;
                     const lastPos = window.movementTracker[trackerId];
                     
-                    let trajectoryMsg = "";
-                    if (lastPos && lastPos.zone !== zone && (now - lastPos.time < 60000)) {
-                        const isIncoming = zoneSequence[zone] > (zoneSequence[lastPos.zone] || 0);
-                        trajectoryMsg = isIncoming 
-                            ? `rör sig nu in från ${lastPos.zone.toLowerCase()} till ${zone.toLowerCase()}`
-                            : `lämnar ${lastPos.zone.toLowerCase()} mot ${zone.toLowerCase()}`;
-                    } else {
-                        trajectoryMsg = `syns nu vid ${zone.toLowerCase()}`;
-                    }
+                    const centerX = (currentObj.x_min + currentObj.x_max) / 2;
+                    const centerY = (currentObj.y_min + currentObj.y_max) / 2;
                     
-                    window.movementTracker[trackerId] = { zone, time: now };
+                    // --- 1. [CHECK] STILLASTÅENDE-SPÄRR (ABSOLUT TOPP) ---
+                    if (lastPos && lastPos.pos) {
+                        const dist = Math.sqrt(Math.pow(centerX - lastPos.pos.x, 2) + Math.pow(centerY - lastPos.pos.y, 2));
+                        if (dist < 20) return; 
+                    }
 
-                    const alertKey = `${zone}_${primaryObj}_global_v2`;
-                    if (!window.lastAlerts[alertKey] || now - window.lastAlerts[alertKey] > (isVaktActive ? 3000 : 7000)) {
+                    // --- 2. REGISTRERA RÖRELSE OCH SPARA MINNE ---
+                    window.movementTracker[trackerId] = { zone, time: now, pos: { x: centerX, y: centerY } };
+                    fs.writeFileSync('tracker.json', JSON.stringify(window.movementTracker, null, 2));
+
+                    const alertKey = `${zone}_${primaryObj}_global_v4`;
+                    if (!window.lastAlerts[alertKey] || now - window.lastAlerts[alertKey] > 60000) {
                         window.lastAlerts[alertKey] = now;
                         
                         const snap = await vision.captureSnapshot(cam);
                         if (snap) {
-                            vision.analyzeIntruder(snap, primaryObj).then(async (analysis) => {
-                                let cleanDesc = analysis.description
-                                    .replace(/\[.*?\]/g, '') // Ta bort [TAGS]
-                                    .replace(/\*\*/g, '')    // Ta bort stjärnor
-                                    .trim();
+                            window.lastIntruderSnap = snap;
+                            
+                            // --- SOCIAL INTELLIGENS (Hela familjen + Vänner) ---
+                            const faceNames = await vision.recognizeFace(cam);
+                            const family = ["Andreas", "Helena", "Josephine", "Lukas"];
+                            const seenFamily = faceNames.filter(name => family.includes(name));
+                            const includesUnknown = faceNames.includes("Okänd");
 
-                                let voiceMsg = "";
-
-                                if (window.isLukasMode) {
-                                    voiceMsg = `Lukas, en ${analysis.classification.toLowerCase()} ${trajectoryMsg}. ${cleanDesc}`;
-                                } else {
-                                    voiceMsg = `Varning! ${isCar ? 'Ett fordon' : 'En person'} ${trajectoryMsg}. ${cleanDesc}`;
+                            if (seenFamily.length > 0 && includesUnknown) {
+                                const mood = await vision.analyzeMood(cam);
+                                if (mood && !mood.toLowerCase().includes("stress")) {
+                                    window.lastFriendSnap = snap;
+                                    window.lastFriendSeenWith = seenFamily.join(" och ");
+                                    console.log(`[SOCIAL] ${window.lastFriendSeenWith} umgås med okänd. Flaggar som vän.`);
                                 }
+                            }
+
+                            window.isAnalyzingIntruder = true; 
+                            vision.analyzeIntruder(snap, primaryObj).then(async (analysis) => {
+                                window.isAnalyzingIntruder = false;
+                                let cleanDesc = analysis.description.replace(/\[.*?\]/g, '').replace(/\*\*/g, '').trim();
+                                let isIdentified = cleanDesc.includes("Identifierad");
+
+                                // --- 3. [CHECK] TOTAL TYSTNAD VID IDENTIFIERING ---
+                                if (isIdentified) {
+                                    console.log(`[SECURITY] Identifierad ${primaryObj} vid ${zone}. Ingen logg skapas.`);
+                                    return; 
+                                }
+
+                                // --- 4. ENDAST SKARPA HÄNDELSER LOGGAS NU ---
+                                let isCar = ["car", "truck", "motorcycle"].includes(primaryObj);
+                                let trajectoryMsg = "";
+                                if (lastPos && lastPos.zone !== zone && (now - lastPos.time < 60000)) {
+                                    const isIncoming = zoneSequence[zone] > (zoneSequence[lastPos.zone] || 0);
+                                    trajectoryMsg = isIncoming ? "rör sig nu inåt" : "rör sig utåt";
+                                } else {
+                                    trajectoryMsg = `syns vid ${zone.toLowerCase()}`;
+                                }
+
+                                const voiceMsg = `🚨 Varning! ${isCar ? 'Ett fordon' : 'En person'} ${trajectoryMsg}. ${cleanDesc}`;
+                                
+                                if (voiceMsg === window.lastSentMessage) return;
+                                window.lastSentMessage = voiceMsg;
 
                                 if (window.isHome && !window.isSleeping) audio.speak(voiceMsg);
                                 window.appendMessage('AI', `🚨 [VAKT-LOGG] ${voiceMsg}`);
 
-                                if (analysis.threatLevel >= 2 || (!window.isHome && zone !== "Infarten")) {
+                                if (!window.incidents) window.incidents = [];
+                                window.incidents.push({ time: new Date().toLocaleTimeString(), detail: voiceMsg });
+                                if (window.incidents.length > 20) window.incidents.shift();
+
+                                if (analysis.threatLevel >= 3 || (!window.isHome && zone !== "Infarten")) {
                                     window.sendTelegramPhoto(`[SÄKERHET] ${voiceMsg}`, snap);
                                 }
                             });
