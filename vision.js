@@ -32,11 +32,10 @@ export class Vision {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: this.visionModel,
-                    messages: [{ 
-                        role: 'user', 
-                        content: "Analyze the person. 1. Mood (happy, tired, etc). 2. Gaze (is the person looking at the camera/screen or away?). Answer in Swedish. Use 'du' for direct address. Max 6 words.",
-                        images: [img]
-                    }],
+                    messages: [
+                        { role: 'system', content: "Du är en AI-assistent som analyserar någons ansikte för att förstå humör och blick. Svara extremt kort på svenska." },
+                        { role: 'user', content: "Analyze the person. 1. Mood (happy, tired, etc). 2. Gaze (looking at camera/screen?). Use 'du'. Max 6 words.", images: [img] }
+                    ],
                     stream: false
                 })
             });
@@ -468,27 +467,25 @@ export class Vision {
         try {
             const rawBase64 = base64Image.replace(/^data:image\/jpeg;base64,/, "");
             
-            // SUPER-PROMPT för hög precision, hot-analys och barnvakt
-            const prompt = `Du är JARVIS Säkerhets-AI. Analysera bilden med EXTREM SAKLIGHET. 
+            // SUPER-PROMPT för naturlig men saklig rapport
+            const prompt = `Analysera bilden som Andreas personliga säkerhetsassistent.
             Detekterat objekt: ${label}.
             
-            DIN VIKTIGASTE REGEL: GISSA ALDRIG. Om bilden är suddig eller detaljer är otydliga, säg "otydliga detaljer". 
-            Beskriv INTE kön eller ålder om du inte är 100% säker.
+            UPPGIFT: Beskriv kortfattat vad du ser på ett naturligt mänskligt sätt (ingen formatering, inga **). 
+            Fokusera på: Klädsel, färger och om personen ser bekant eller misstänkt ut.
+            Svara på SVENSKA. Max 15 ord.
             
-            DINA PRIORITERADE FRÅGOR:
-            1. Beskriv klädsel och färger (t.ex. "mörk jacka").
-            2. HOT-ANALYS: Ser du vapen, maskering eller aggressivt kroppsspråk?
-            3. BARN-VAKT: Är det ett barn? Ligger personen ner?
-            
-            Svara på SVENSKA. Max 20 ord. Var klinisk och saklig.
-            Avsluta med en TAG: [HOT: LÅG/MEDEL/HÖG] [KARAKTÄR: VÄNLIG/MISSTÄNKT/HOTFULL] [TYP: VUXEN/BARN/FORDON]`;
+            AVSLUTA MED EN TAG PÅ NY RAD: [HOT: LÅG/MEDEL/HÖG] [TYP: VUXEN/BARN/FORDON]`;
             
             const res = await fetch('http://127.0.0.1:11434/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: this.visionModel,
-                    messages: [{ role: 'user', content: prompt, images: [rawBase64] }],
+                    messages: [
+                        { role: 'system', content: prompt },
+                        { role: 'user', content: "Beskriv bilden.", images: [rawBase64] }
+                    ],
                     stream: false
                 })
             });

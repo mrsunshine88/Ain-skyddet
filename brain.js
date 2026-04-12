@@ -231,6 +231,9 @@ export class Brain {
     }
 
     async getOllamaResponse(model, messages, streamCallback) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 sekunders säkerhets-timeout
+
         try {
             const response = await fetch('http://127.0.0.1:11434/api/chat', {
                 method: 'POST',
@@ -240,17 +243,26 @@ export class Brain {
                     messages, 
                     stream: true,
                     options: { num_ctx: 2048, num_predict: 256, temperature: 0.7 }
-                })
+                }),
+                signal: controller.signal
             });
+            
+            clearTimeout(timeoutId);
 
             const reader = response.body.getReader();
             let fullOutput = "";
+            let buffer = ""; // NYTT: Håller ofullständig data
             
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 
-                const lines = new TextDecoder().decode(value).split('\n');
+                buffer += new TextDecoder().decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                
+                // Behåll den sista raden i buffern om den inte är komplett (saknar \n)
+                buffer = lines.pop(); 
+
                 for (const line of lines) {
                     if (!line.trim()) continue;
                     try {
@@ -259,7 +271,10 @@ export class Brain {
                             fullOutput += json.message.content;
                             if (streamCallback) streamCallback(fullOutput);
                         }
-                    } catch (e) {}
+                    } catch (e) {
+                        // Logga endast om det rör sig om något annat än fragmenterad JSON
+                        if (!line.includes('}')) console.warn("Ofullständig bit mottagen...");
+                    }
                 }
             }
             return fullOutput;
