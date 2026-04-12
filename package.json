@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "electron": "^33.0.0",
-    "localtunnel": "^2.0.2"
+    "localtunnel": "^2.0.2",
+    "mqtt": "^5.15.1"
   }
 }

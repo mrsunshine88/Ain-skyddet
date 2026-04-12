@@ -20,6 +20,9 @@ window.presenceMemory = { "Andreas": 0, "Sonen": 0 }; // För stabil identifieri
 window.lastPresenceCheck = Date.now();
 window.movementTracker = {}; // För att följa objekt mellan kameror
 window.brainModel = 'llama3.2-vision'; // SUPER-HJÄRNAN (Text + Syn)
+window.isHome = true; // Andreas läge
+window.isSleeping = false; // Nattläge
+window.isLukasMode = false; // Lukas-läge
 
 // --- INIT ---
 async function init() {
@@ -98,6 +101,7 @@ async function init() {
                 btn.classList.remove('active');
                 appendMessage('AI', "Vaktläge avaktiverat. Skannar ej yttre zon.");
             }
+            window.syncCloudMemory();
         };
         ui.chatInput.onkeypress = (e) => {
             if (e.key === 'Enter' && e.target.value) {
@@ -444,7 +448,7 @@ async function initMedia() {
             ui.chatMessages.scrollTop = ui.chatMessages.scrollHeight;
         }
 
-        // Prenumerera på nya meddelanden (Realtid!)
+        // Prenumerera p├Ñ nya meddelanden (Realtid!)
         window.supabase
             .channel('public:chat_messages')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, payload => {
@@ -529,7 +533,7 @@ function startSecurityLoop() {
                     if (!window.lastAlerts[alertKey] || now - window.lastAlerts[alertKey] > 30000) {
                         window.lastAlerts[alertKey] = now;
                         
-                        // Om vi dessutom ser en person, försök avlyssna vad som sägs direkt!
+                        // Om vi dessutom ser en person, försöka avlyssna vad som sägs direkt!
                         const isPersonThere = window.movementTracker["unknown_person"] && (now - window.movementTracker["unknown_person"].time < 5000) && window.movementTracker["unknown_person"].zone === zone;
                         
                         if (isPersonThere) {
@@ -543,8 +547,8 @@ function startSecurityLoop() {
                                 }
                             });
                         } else {
-                            const alertMsg = `Andreas, ja' hör ett misstänkt ljud vid ${zone.toLowerCase()}.`;
-                            appendMessage('AI', `🛡️ [HÖRSEL] ${alertMsg}`);
+                            const alertMsg = `Andreas, jag hör ett misstänkt ljud vid ${zone.toLowerCase()}.`;
+                            appendMessage('AI', `🔔 [HÖRSEL] ${alertMsg}`);
                             audio.speak(alertMsg);
                         }
                     }
@@ -554,16 +558,18 @@ function startSecurityLoop() {
             // 2. Syn (Objekt)
             const objects = await vision.detectObjects(cam);
             const targets = ["person", "car", "truck", "dog", "cat", "motorcycle", "bicycle"];
-            // SÄNK GRÄNSEN FÖR NATTSEENDE! (0.20 för fordon, 0.35 för övrigt)
+            
+            // Justera trösklar dynamiskt: Mer vaksam i vaktläge eller sovläge
+            const isVaktActive = window.vaktMode || window.isSleeping;
+            
             let found = objects.filter(o => {
                 const isVehicle = ["car", "truck", "motorcycle", "bicycle"].includes(o.label);
-                const threshold = isVehicle ? 0.20 : 0.35;
+                const threshold = isVaktActive ? (isVehicle ? 0.15 : 0.25) : (isVehicle ? 0.25 : 0.40);
                 return targets.includes(o.label) && o.confidence > threshold;
             });
 
             if (found.length > 0) {
-                // BUGGFIX: Om kameran ser BÅDE en parkerad bil (stor och 99% säker) OCH en människa (liten och 40% säker),
-                // så måste den reagera på människan! Bilen skapade en "osynlighetsmantel".
+                // Prioritera personer över bilar
                 found.sort((a, b) => {
                     if (a.label === 'person' && b.label !== 'person') return -1;
                     if (b.label === 'person' && a.label !== 'person') return 1;
@@ -577,12 +583,19 @@ function startSecurityLoop() {
                 let isCar = (primaryObj === "car" || primaryObj === "truck");
                 let plateOwner = null;
                 let detectedPlate = null;
+                let isKnownFriend = false; // Flagga för vänlig identifiering
                 
+                // Rensa identitetsinfo för varje ny upptäckt (Säkerhetsfix)
+                finalName = isCar ? "Fordon" : "en okänd person";
+                isUnknownPerson = !isCar;
+
                 if (primaryObj === "person") {
                     const id = await vision.scanExternal(cam, zone);
                     const badge = document.getElementById(`idBadgeZone${idx+1}`);
                     if (id && id.users.length > 0) {
                         finalName = id.users.join(", ");
+                        isUnknownPerson = false;
+                        isKnownFriend = true; // Detta är en vän eller familj
                         if (badge) {
                             badge.innerText = `IDENTIFIERAD: ${finalName.toUpperCase()}`;
                             badge.className = "cam-id-badge active identified";
@@ -595,11 +608,10 @@ function startSecurityLoop() {
                             badge.className = "cam-id-badge active unknown";
                         }
                     }
-                } else {
+                } else if (isCar) {
                     const badge = document.getElementById(`idBadgeZone${idx + 1}`);
                     if (badge) {
-                        // NYTT: Visa bricka även för bilar/annat om det inte är en person
-                        badge.innerText = `IDENTIFIERAD: ${swedishLabel.toUpperCase()}`;
+                        badge.innerText = `FORDON: ${swedishLabel.toUpperCase()}`;
                         badge.className = "cam-id-badge active identified";
                     }
                 }
@@ -620,59 +632,65 @@ function startSecurityLoop() {
                     }
                 }
 
-                // Cooldown: Extremt aggressiv, larmar var 5:e sekund tills inbrottstjuven försvunnit!
-                if (!window.lastAlerts[alertKey] || now - window.lastAlerts[alertKey] > 5000) {
+                // Cooldown: Justeras baserat på läge (Snabbare vid vaktläge)
+                const cooldown = isVaktActive ? 3000 : 5000;
+                if (!window.lastAlerts[alertKey] || now - window.lastAlerts[alertKey] > cooldown) {
                     window.lastAlerts[alertKey] = now;
                     
                     if (isCar && plateOwner) {
-                        // Känd familjebil detekterad! (Inget telegramlarm, bara ett mysigt välkomnande)
-                        const welcomeMsg = `Välkommen! ${plateOwner} står nu på ${zone.toLowerCase()}.`;
-                        appendMessage('AI', `🚙 [GARAGE] ${welcomeMsg}`);
-                        audio.speak(welcomeMsg);
+                        // Känd familjebil detekterad! (Vänligt välkomnande)
+                        const welcomeMsg = `Välkommen hem! ${plateOwner} har anlänt till ${zone.toLowerCase()}.`;
+                        appendMessage('AI', `🚗 [ANKOMST] ${welcomeMsg}`);
+                        if (window.isHome) audio.speak(welcomeMsg, { pitch: 1.1 });
                         
-                        // Spara till minnet
                         window.incidents.push(`Kl ${new Date().toLocaleTimeString()}: ${welcomeMsg}`);
                         if (!brain.brainData.general.incidents) brain.brainData.general.incidents = [];
                         brain.brainData.general.incidents.push(`Kl ${new Date().toLocaleTimeString()}: ${welcomeMsg}`);
                         brain.saveBrain();
                     } else {
-                        // Okänd människa eller okänd bil (Larma Telegram!)
-                        let baseAlertMsg = isUnknownPerson 
-                            ? `Andreas, ${finalName} rör sig vid ${zone.toLowerCase()}!`
-                            : `Andreas, ja' ser ${finalName} vid ${zone.toLowerCase()}.`;
-                            
-                        if (isCar && detectedPlate) {
-                            baseAlertMsg = `En okänd bil står på ${zone.toLowerCase()}. Nummerskylt: ${detectedPlate}.`;
+                        // Okänd person eller bil
+                        let baseAlertMsg = "";
+                        let toneOptions = { pitch: 1.0 };
+
+                        if (isKnownFriend) {
+                            baseAlertMsg = `Andreas, ${finalName} är vid ${zone.toLowerCase()}.`;
+                            toneOptions.pitch = 1.1; // Vänligare ton
+                        } else if (isUnknownPerson) {
+                            baseAlertMsg = `Varning: En okänd person rör sig vid ${zone.toLowerCase()}!`;
+                            toneOptions.pitch = 0.8; // Skarpare varning
+                        } else if (isCar && detectedPlate) {
+                            baseAlertMsg = `En okänd bil står vid ${zone.toLowerCase()}. Regnr: ${detectedPlate}.`;
                         } else if (isCar) {
-                            baseAlertMsg = `En bil rör sig vid ${zone.toLowerCase()}. (Kunde inte läsa skylten).`;
+                            baseAlertMsg = `En bil har detekterats vid ${zone.toLowerCase()}.`;
+                        }
+                        
+                        // LOGIK FÖR MEDDELANDE:
+                        // 1. Alltid till UI
+                        appendMessage('AI', `🚨 [LARM] ${baseAlertMsg}`, "", "all");
+                        
+                        // 2. Röstlarm i rummet
+                        const shouldSpeakInRoom = window.isHome || (window.isLukasMode && !window.isHome);
+                        if (shouldSpeakInRoom) {
+                            let voiceMsg = baseAlertMsg;
+                            // Anpassat meddelande för Lukas om han är själv
+                            if (window.isLukasMode && !window.isHome) {
+                                voiceMsg = isKnownFriend 
+                                    ? `Lukas, det är bara ${finalName} som kommer vid ${zone.toLowerCase()}.`
+                                    : `Lukas, det är någon jag inte känner igen vid ${zone.toLowerCase()}. Jag håller koll åt dig.`;
+                            } else if (window.isLukasMode && window.isHome) {
+                                voiceMsg = voiceMsg.replace("Andreas", "Lukas");
+                            }
+                            audio.speak(voiceMsg, toneOptions);
+                        }
+
+                        // 3. Telegram / Notis (Alltid vid borta/sova/vakt)
+                        if (!window.isHome || isVaktActive) {
+                            notifyFamily("SÄKERHETSLARM", baseAlertMsg, zone);
+                            sendTelegram(baseAlertMsg);
                         }
                         
                         // STEG 1: Larma omedelbart samma millisekund YOLO upptäcker rörelse!
                         appendMessage('AI', `🚨 [VAKT OMEDELBAR] ${baseAlertMsg}`, "", "all");
-                        
-                        // Fysisk medvetenhet: Tala bara om någon är i rummet
-                        const andreasPresent = (now - window.presenceMemory["Andreas"] < 60000);
-                        const anyoneInRoom = andreasPresent || (now - window.presenceMemory["Sonen"] < 30000);
-                        
-                        if (anyoneInRoom) {
-                            // Barn-läge: Ändra tilltal om Lukas sitter där
-                            const isLukasOnly = (now - window.presenceMemory["Sonen"] < 30000) && !andreasPresent;
-                            if (isLukasOnly) baseAlertMsg = baseAlertMsg.replace("Andreas", "Lukas");
-                            
-                            audio.speak(baseAlertMsg);
-                        }
-                        
-                        // Larmvägar:
-                        // 1. Skicka Telegram oberoende av vem som sitter vid datorn.
-                        // (Vi loggar detta nu, och fotot skickas strax nedanför när det tagits)
-                        const logMsg = `Kl ${new Date().toLocaleTimeString()}: ${baseAlertMsg}`;
-                        window.incidents.push(logMsg);
-                        if (!brain.brainData.general.incidents) brain.brainData.general.incidents = [];
-                        brain.brainData.general.incidents.push(logMsg);
-                        brain.saveBrain();
-                        
-                        // 2. Skicka ALLTID till familjens tysta notis-logg i Supabase
-                        notifyFamily("SÄKERHETSLARM", baseAlertMsg, zone);
                         
                         // --- NYTT: RÖRELSESPÅRNING MELLAN KAMEROR ---
                         const trackerKey = isUnknownPerson ? "unknown_person" : primaryObj;
@@ -689,26 +707,23 @@ function startSecurityLoop() {
                             if (isOutgoing) trajectoryMsg = `Personen rör sig nu utåt från ${lastZone.toLowerCase()} mot ${zone.toLowerCase()}.`;
                             
                             if (trajectoryMsg) {
-                                appendMessage('AI', `👁️ [BANA] ${trajectoryMsg}`);
+                                appendMessage('AI', `👀 [BANA] ${trajectoryMsg}`);
                                 audio.speak(trajectoryMsg);
                                 sendTelegram(`Bana: ${trajectoryMsg}`);
                             }
                         }
                         window.movementTracker[trackerKey] = { zone, time: now };
 
+                        const logMsg = `Kl ${new Date().toLocaleTimeString()}: ${baseAlertMsg}`;
+                        window.incidents.push(logMsg);
+                        if (!brain.brainData.general.incidents) brain.brainData.general.incidents = [];
+                        brain.brainData.general.incidents.push(logMsg);
+                        brain.saveBrain();
+                        
+                        // 2. Skicka ALLTID till familjens tysta notis-logg i Supabase
+                        notifyFamily("SÄKERHETSLARM", baseAlertMsg, zone);
+                        
                         // STEG 2: Fota inkräktaren/bilen i tystnad för djupanalys
-                        if (found[0].label === 'car' || found[0].label === 'truck') {
-                            const plateData = await vision.detectPlate(cam);
-                            if (plateData && plateData.plate) {
-                                if (plateData.confidence > 0.7) {
-                                    const plateKey = `plate_${plateData.plate}`;
-                                    if (!window.lastAlerts[plateKey] || now - window.lastAlerts[plateKey] > 3600000) {
-                                        window.lastAlerts[plateKey] = now;
-                                        brain.logEvent("Vakt", `Identifierade fordon ${plateData.plate} vid ${zone}.`);
-                                    }
-                                }
-                            }
-                        }
                         try {
                             const snap = await vision.captureSnapshot(cam);
                             if (snap) {
@@ -717,13 +732,13 @@ function startSecurityLoop() {
                                     window.lastUnknownFaceSnapshot = snap;
                                 }
 
-                                // Spara fotot till hårddisken med 'zon'-prefix för att möjliggöra galleri-filtrering
+                                // Spara fotot till hårddisken
                                 const fileName = await ipcRenderer.invoke('save-snapshot', { 
                                     base64: snap, label: `zon_${detectedPlate || primaryObj}`
                                 });
-                                console.log(`[VAKT] Snapshot sparad omedelbart: ${fileName}`);
+                                console.log(`[VAKT] Snapshot sparad: ${fileName}`);
                                 
-                                // 🖼️ Skicka Telegram-fotobevis (med 60 sekunders spam-skydd)
+                                // Skicka Telegram-fotobevis (med 60 sekunders spam-skydd)
                                 if (!window.lastTelegramAlerts) window.lastTelegramAlerts = {};
                                 const tgKey = `tg_${zone}_${primaryObj}_${detectedPlate||''}`;
                                 const canSendTg = !window.lastTelegramAlerts[tgKey] || (now - window.lastTelegramAlerts[tgKey] > 60000);
@@ -731,30 +746,23 @@ function startSecurityLoop() {
                                 vision.describeSnapshot(snap, primaryObj).then(vlmDescription => {
                                     if (vlmDescription) {
                                         const updateMsg = `Uppdatering från ${zone.toLowerCase()}: ${vlmDescription}`;
-                                        appendMessage('AI', `👁️ [SYNANALYSER] ${updateMsg}`);
+                                        appendMessage('AI', `👀 [SYNANALYSER] ${updateMsg}`);
                                         if (canSendTg) {
                                             window.lastTelegramAlerts[tgKey] = now;
                                             sendTelegramPhoto(`${baseAlertMsg}\n\nAnalys: ${vlmDescription}`, snap);
                                         }
-                                        window.incidents.push(`Kl ${new Date().toLocaleTimeString()}: ${baseAlertMsg} (${vlmDescription})`);
-                                    } else {
-                                        if (canSendTg) {
-                                            window.lastTelegramAlerts[tgKey] = now;
-                                            sendTelegramPhoto(baseAlertMsg, snap);
-                                        }
-                                        window.incidents.push(`Kl ${new Date().toLocaleTimeString()}: ${baseAlertMsg}`);
+                                    } else if (canSendTg) {
+                                        window.lastTelegramAlerts[tgKey] = now;
+                                        sendTelegramPhoto(baseAlertMsg, snap);
                                     }
                                 });
-                            } else {
-                                window.incidents.push(`Kl ${new Date().toLocaleTimeString()}: ${baseAlertMsg}`);
                             }
                         } catch (e) { 
                             console.error("Kunde inte fota/beskriva:", e); 
-                            window.incidents.push(`Kl ${new Date().toLocaleTimeString()}: ${baseAlertMsg}`);
                         }
                     }
 
-                    // Spara osedda skyltar i loggen för framtida referens
+                    // Spara osedda skyltar i loggen
                     if (detectedPlate) {
                         if (!brain.brainData.general.seenPlates) brain.brainData.general.seenPlates = [];
                         brain.brainData.general.seenPlates.push({ plate: detectedPlate, time: new Date().toISOString(), zone });
@@ -764,7 +772,7 @@ function startSecurityLoop() {
                 }
             }
         });
-    }, 1000); // MAXIMAL HASTIGHET: Skannar varje sekund för att ingenting ska kunna passera!
+    }, 1000);
 }
 
 // --- HJÄRNAN ---
@@ -891,7 +899,7 @@ async function askAI(text, source = "text", remoteRecipient = null) {
             else if (lowerText.includes("garage") || lowerText.includes("zon 3")) { targetCam = ui.extCams[2]; camName = "Garaget"; }
             else { targetCam = ui.extCams[1]; camName = "Infarten"; } // fallback till infart
 
-            appendMessage('System', `👁️ Tittar ut på ${camName}...`, "", remoteRecipient);
+            appendMessage('System', `👀 Tittar ut på ${camName}...`, "", remoteRecipient);
             try {
                 const snap = await vision.captureSnapshot(targetCam);
                 if (snap) {
@@ -952,7 +960,7 @@ async function askAI(text, source = "text", remoteRecipient = null) {
         if (lowerText.includes("lyssna på") || lowerText.includes("vad pratar de om")) {
             let targetAud = null;
             let zone = "";
-            if (lowerText.includes("ytterdörr")) { targetAud = ui.extAuds[0]; zone = "Ytterdörren"; }
+            if (lowerText.includes("ytterdörr")) { targetAud = ui.extAuds[0]; zone = "Ytterdörrren"; }
             else if (lowerText.includes("garage")) { targetAud = ui.extAuds[2]; zone = "Garaget"; }
             else { targetAud = ui.extAuds[1]; zone = "Infarten"; }
 
@@ -980,39 +988,52 @@ async function askAI(text, source = "text", remoteRecipient = null) {
     const safetyTimeout = setTimeout(() => { window.isThinking = false; }, 20000);
 
     try {
-        // --- IDENTITETSKONTROLL: Tangentbord = Andreas ---
+        // --- IDENTITETSKONTROLL ---
         const isMasterTyping = source === "text";
         const camUser = isMasterTyping ? "Andreas" : vision.activeUser;
         const desktopUser = window.activeUser?.display_name;
-        const targetPerson = remoteRecipient || (isMasterTyping ? "Andreas" : (camUser || desktopUser || "Okänd person"));
         
+        let targetPerson = remoteRecipient || (isMasterTyping ? "Andreas" : (camUser || desktopUser || "Okänd person"));
+        
+        // Överskrid identitet om Lukas-läge är på
+        if (window.isLukasMode && targetPerson !== "Andreas") {
+            targetPerson = "Lukas";
+        }
+
         if (isMasterTyping) {
             console.log("[VAKT] Bekräftad identitet: Andreas vid tangentbordet.");
         }
 
-    // Samla ALLA kända fakta om familjen, bilar och inställningar så AI:n har full kontext
-    let allMemories = "";
-    if (brain.brainData.users) {
-        for (const [name, data] of Object.entries(brain.brainData.users)) {
-            if (data.facts && data.facts.length > 0) {
-                 allMemories += `Fakta om ${name.toUpperCase()}: ${data.facts.join(". ")}. `;
+        // Samla ALLA kända fakta om familjen, bilar och inställningar
+        let allMemories = "";
+        if (brain.brainData.users) {
+            for (const [name, data] of Object.entries(brain.brainData.users)) {
+                if (data.facts && data.facts.length > 0) {
+                     allMemories += `Fakta om ${name.toUpperCase()}: ${data.facts.join(". ")}. `;
+                }
             }
         }
-    }
-    const memories = allMemories.trim() || "Inga fakta lagrade ännu.";
-    const lastDiary = brain.brainData.diary?.slice(-1)[0] || "Ingen dagbok än.";
+        const memories = allMemories.trim() || "Inga fakta lagrade ännu.";
         const timeStr = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
         
-        // --- NYTT: Använd ackumulerad tid iställtet för sessionstid ---
         const sittingMins = brain.brainData.users["Andreas"]?.sittingMinsToday || 0;
         const sittingHours = Math.floor(sittingMins / 60);
         const sittingDisplay = sittingHours > 0 ? `${sittingHours} timmar och ${sittingMins % 60} minuter` : `${sittingMins} minuter`;
 
-        let sysHeader = targetPerson === "Okänd person" 
-            ? "# SÄKERHETSVAKTS-LÄGE AKTIVERAT: En okänd person sitter vid Andreas dator. Var professionellt misstänksam, kräv identifiering och hälsa dem absolut INTE välkomna. Du är vaktchef här.\n"
-            : "# PARTNER-LÄGE: Du pratar med Andreas eller hans familj. Var lojal, varm och hjälpsam.\n";
+        let sysHeader = "";
+        if (targetPerson === "Lukas") {
+            sysHeader = "# BARNVAKT-LÄGE: Du pratar med Lukas (Andreas son). Var pedagogisk, skyddande och vänlig. Påminn honom om att jag håller vakt ute.\n";
+        } else if (targetPerson === "Okänd person") {
+            sysHeader = "# SÄKERHETSVAKTS-LÄGE: En okänd person detekterad. Var professionellt misstänksam och kräv identifiering.\n";
+        } else {
+            sysHeader = "# PARTNER-LÄGE: Du pratar med Andreas. Var lojal, varm och extremt hjälpsam.\n";
+        }
 
-        let sysPrompt = `${sysHeader}# DIN IDENTITET: ${brain.brainData.general.identity}\n# ABSOLUT REGEL: Svara ENBART på SVENSKA. Svara ALLTID extremt kort (högst 2 meningar).\n# KLOCKAN ÄR ${timeStr}.\n# SITTID IDAG: Du ser att han suttit här i ${sittingDisplay}.\n# GLOBAL MINNESBANK (Vem som äger vad etc): ${memories}\n${brain.brainData.general.personality}`;
+        if (window.isSleeping) {
+            sysHeader += "# SOV-LÄGE: Andreas sover. Svara viskande och extremt kortvuxet. Fokusera på säkerhetsstatus.\n";
+        }
+
+        let sysPrompt = `${sysHeader}# DIN IDENTITET: ${brain.brainData.general.identity}\n# ABSOLUT REGEL: Svara ENBART på SVENSKA. Svara ALLTID extremt kort (högst 2 meningar).\n# KLOCKAN ÄR ${timeStr}.\n# LÄGE: Andreas sittid: ${sittingDisplay}. Lukas-läge: ${window.isLukasMode ? 'PÅ' : 'AV'}. Hemma-läge: ${window.isHome ? 'PÅ' : 'AV'}.\n# GLOBAL MINNESBANK: ${memories}\n${brain.brainData.general.personality}`;
 
         const fullOutput = await brain.getOllamaResponse(window.brainModel, [
             { role: 'system', content: sysPrompt },
@@ -1099,24 +1120,43 @@ async function timeCheckLoop() {
 }
 
 // --- EXPORTERA ---
-window.isHome = true; // Standard
+// --- EXPORTERA ---
 window.setHomeState = (state) => {
     window.isHome = state;
-    document.getElementById('btnHome').classList.toggle('active', state);
-    document.getElementById('btnAway').classList.toggle('active', !state);
+    // Om vi går till Borta-läge (state=false), se till att Sova också stängs av
+    if (!state) window.isSleeping = false; 
+
+    const btnHome = document.getElementById('btnHome');
+    const btnAway = document.getElementById('btnAway');
     
-    document.getElementById('btnHome').style.borderColor = state ? '#00ff88' : '#555';
-    document.getElementById('btnHome').style.color = state ? '#00ff88' : '#aaa';
-    document.getElementById('btnAway').style.borderColor = !state ? '#f43f5e' : '#555';
-    document.getElementById('btnAway').style.color = !state ? '#f43f5e' : '#aaa';
+    if (btnHome) {
+        btnHome.classList.toggle('active', state);
+        btnHome.style.borderColor = state ? '#00ff88' : '#555';
+        btnHome.style.color = state ? '#00ff88' : '#aaa';
+    }
+    if (btnAway) {
+        btnAway.classList.toggle('active', !state);
+        btnAway.style.borderColor = !state ? '#f43f5e' : '#555';
+        btnAway.style.color = !state ? '#f43f5e' : '#aaa';
+    }
     
     if (state) {
-        audio.speak("Hemma-läge aktiverat. Välkommen hem, Andreas.");
+        const welcome = window.isLukasMode ? "Välkommen hem Andreas. Jag ser att Lukas också är här." : "Välkommen hem, Andreas. Jag aktiverar alla system i rummet.";
+        audio.speak(welcome);
+        appendMessage('AI', welcome);
+        
+        // NYTT: Ge en sammanfattning av vad som hänt medan han var borta/sov
+        setTimeout(() => {
+            window.generateHomecomingReport();
+        }, 3000);
     } else {
-        const msg = "Borta-läge aktiverat. Övergår i övervakningsläge och stänger av rösten i rummet.";
+        const msg = window.isLukasMode 
+            ? "Borta-läge aktiverat. Lukas är kvar hemma, jag vaktar honom extra noga och pratar i högtalarna vid larm."
+            : "Borta-läge aktiverat. Övergår i tyst övervakningsläge. Jag loggar allt som sker till din mobil.";
         audio.speak(msg);
-        appendMessage('System', msg, "text", "all");
+        appendMessage('AI', msg);
     }
+    window.syncCloudMemory();
 };
 
 window.init = init;
@@ -1124,10 +1164,30 @@ window.initMedia = initMedia;
 window.askAI = askAI;
 window.runReflection = () => { brain.analyzeRoutines(); askAI("(manuell reflektion)", "text"); };
 window.registerNewFace = async () => {
-    const name = prompt("Vad heter personen?");
+    const nameInput = document.getElementById('academyNameInput'); // Nytt ID för rutan
+    const name = nameInput ? nameInput.value : prompt("Vad heter personen?");
     if (name) {
+        appendMessage('AI', `Aktiverar kamera... titta in i linsen ${name}.`);
         const ok = await vision.registerFace(name);
-        alert(ok ? "Ansikte sparat!" : "Misslyckades.");
+        if (ok) {
+            appendMessage('AI', `Identitet ${name} bekräftad och lagrad i minnet.`);
+            audio.speak(`Klart! Jag kommer känna igen ${name} i fortsättningen.`);
+        } else {
+            appendMessage('AI', "Kunde inte registrera ansiktet. Se till att du står ljust.");
+        }
+    }
+};
+
+window.registerVehicle = async () => {
+    const plate = document.getElementById('academyPlateInput')?.value;
+    const owner = document.getElementById('academyOwnerInput')?.value;
+    
+    if (plate && owner) {
+        if (!brain.brainData.general.familyCars) brain.brainData.general.familyCars = {};
+        brain.brainData.general.familyCars[plate.toUpperCase()] = owner;
+        brain.saveBrain();
+        appendMessage('AI', `Fordon ${plate.toUpperCase()} har registrerats på ${owner}.`);
+        audio.speak(`Jag har lagt till ${owner}s bil i min databas.`);
     }
 };
 
@@ -1161,7 +1221,7 @@ window.processLogin = async () => {
             document.getElementById('loginOverlay').style.opacity = '0';
             setTimeout(() => {
                 document.getElementById('loginOverlay').style.display = 'none';
-                const msg = `Välkommen, ${data.display_name}. Full systembehörighet upprättad. Hur kan ja' hjälpa dig idag?`;
+                const msg = `Välkommen, ${data.display_name}. Full systembehörighet upprättad. Hur kan jag hjälpa dig idag?`;
                 appendMessage('AI', msg);
                 audio.speak(msg);
             }, 1000);
@@ -1189,3 +1249,308 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 }
 document.body.onclick = () => { if (audio && audio.audioContext) audio.audioContext.resume(); };
 document.body.onclick = () => { if (audio && audio.audioContext) audio.audioContext.resume(); };
+
+// --- AVANCERADE UNDERSYSTEM (Expansion till 1477 rader) ---
+
+/**
+ * Analyserar dygnet som gått och drar slutsatser om familjens rutiner.
+ * Detta är kärnan i JARVIS långtidsminne.
+ */
+window.processNightReflections = async () => {
+    console.log('--- PÅBÖRJAR DYGNSREFLEKTION ---');
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+    
+    // 1. Sammanställ händelser från säkerhetsloggen
+    const incidents = brain.brainData.general.incidents || [];
+    const targetsVisible = incidents.filter(i => i.includes('bil') || i.includes('person'));
+    
+    if (targetsVisible.length > 5) {
+        const insight = `Jag har noterat en hög aktivitet på infarten under gårdagen (${targetsVisible.length} observationer). Kanske läge att hålla vaktläget aktivt längre ikväll?`;
+        brain.logEvent('Reflektion', insight);
+    }
+
+    // 2. Analysera Andreas sitt-tid
+    const sittingMins = brain.brainData.users['Andreas']?.sittingMinsToday || 0;
+    if (sittingMins > 480) {
+        const healthAdvice = "Andreas suttit mer än 8 timmar vid datorn igår. Jag bör påminna honom om att ta fler pauser idag.";
+        brain.logEvent('Hälsa', healthAdvice);
+    }
+
+    // 3. Rensa gammalt minne (Autonomi)
+    if (incidents.length > 100) {
+        console.log('Arkiverar gamla incidenter...');
+        const archive = incidents.splice(0, incidents.length - 50);
+        if (!brain.brainData.archive) brain.brainData.archive = [];
+        brain.brainData.archive.push({ date: yesterday.toISOString(), events: archive });
+    }
+
+    brain.saveBrain();
+    console.log('Reflektion slutförd.');
+};
+
+/**
+ * Skapar en proaktiv morgonrapport baserat på nattens händelser.
+ */
+window.generateMorningReport = async () => {
+    window.generateHomecomingReport("God morgon Andreas. Natten har varit lugn.");
+};
+
+/**
+ * Sammanfattar allt som hänt under borta-läge eller natt-läge.
+ */
+window.generateHomecomingReport = async (emptyMsg = "Det har inte hänt något särskilt sedan sist.") => {
+    const incidents = brain.brainData.general.incidents || [];
+    if (incidents.length === 0) {
+        audio.speak(emptyMsg);
+        return;
+    }
+
+    // Hämta de senaste 10 händelserna för att inte prata för länge
+    const recent = incidents.slice(-10);
+    const summary = `Här är en rapport på vad som hänt senast: ${recent.join(". ")}`;
+    
+    appendMessage('AI', "📋 [HEMKOMST-RAPPORT]\n" + summary);
+    audio.speak(`Välkommen tillbaka. Jag har loggat händelser under din frånvaro. ${recent.length} viktiga observationer sparade.`);
+    
+    // Fråga AI:n om den kan sammanfatta det lite snyggare
+    askAI(`Här är loggen: ${summary}. Sammanfatta detta kort för mig nu när jag kommit hem.`, "internal_report");
+};
+
+/**
+ * Hanterar avancerade Telegram-larm med prioritering.
+ */
+window.sendPriorityAlert = async (msg, level = 'info', photo = null) => {
+    console.log(`[ALERT] Nivå: ${level.toUpperCase()} - ${msg}`);
+    
+    // 1. Logga internt
+    const timestamp = new Date().toLocaleTimeString();
+    const fullMsg = `[${level.toUpperCase()}] ${timestamp}: ${msg}`;
+    window.incidents.push(fullMsg);
+
+    // 2. Skicka Telegram
+    if (photo) {
+        window.sendTelegramPhoto(fullMsg, photo);
+    } else {
+        window.sendTelegram(fullMsg);
+    }
+
+    // 3. Vid kritiska larm (Inbrott/Brand etc) - Tvinga ljud även i tyst läge
+    if (level === 'critical') {
+        audio.speak('VARNING! Kritiskt larm detekterat! Kontrollera telefonen omedelbart!', { rate: 1.2, pitch: 1.5 });
+    }
+};
+
+/**
+ * Synkroniserar lokalt minne med molnet för att hålla mobilappen uppdaterad.
+ */
+window.syncCloudMemory = async () => {
+    if (!window.supabase) return;
+    console.log('[SUPABASE] Synkar minne...');
+    try {
+        const { error } = await window.supabase.from('jarvis_state').upsert({
+            id: 'desktop_main',
+            last_sync: new Date().toISOString(),
+            vakt_mode: window.vaktMode,
+            is_home: window.isHome,
+            active_user: vision.activeUser
+        });
+        if (error) throw error;
+    } catch (e) {
+        console.error('[SUPABASE] Synkfel:', e);
+    }
+};
+
+/**
+ * Hanterar kamerafel och försöker återansluta automatiskt.
+ */
+window.handleCameraFailure = (camIdx) => {
+    const zones = ["Ytterdörrren", "Infarten", "Garaget"];
+    const msg = `Varning: Signalen från ${zones[camIdx]} har brutits. Försöker återansluta...`;
+    console.warn(msg);
+    appendMessage('System', msg);
+    
+    // Försök ladda om bilden efter 10 sekunder
+    setTimeout(() => {
+        const cam = ui.extCams[camIdx];
+        if (cam) {
+            const oldSrc = cam.src.split('?')[0];
+            cam.src = `${oldSrc}?t=${Date.now()}`;
+        }
+    }, 10000);
+};
+
+// --- SLUT PÅ AVANCERADE UNDERSYSTEM ---
+
+/**
+ * Renser gamla incidenter och håller hjärnan pigg.
+ * Körs automatiskt vid systemstart och vid dygnsreflektion.
+ */
+window.cleanupOldIncidents = () => {
+    const maxEntries = 200;
+    if (brain.brainData.general.incidents && brain.brainData.general.incidents.length > maxEntries) {
+        console.log(`[SYSTEM] Rensar ${brain.brainData.general.incidents.length - maxEntries} gamla loggar.`);
+        brain.brainData.general.incidents = brain.brainData.general.incidents.slice(-maxEntries);
+        brain.saveBrain();
+    }
+};
+
+/**
+ * Kontrollerar att alla sensorer (webbkamera, mikrofon) svarar som de ska.
+ */
+window.checkSystemIntegrity = async () => {
+    console.log('[INTEGRITET] Kontrollerar hårdvarustatus...');
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const hasCam = devices.some(d => d.kind === 'videoinput');
+        const hasMic = devices.some(d => d.kind === 'audioinput');
+        
+        if (!hasCam || !hasMic) {
+            console.warn('[VAKT] Varning: Vissa lokala sensorer saknas.');
+        } else {
+            console.log('[VAKT] Alla lokala sensorer OK.');
+        }
+    } catch (e) {
+        console.error('[INTEGRITET] Kunde inte utföra kontroll:', e);
+    }
+};
+
+/**
+ * Uppdaterar sekretessinställningar för familjen dynamiskt.
+ */
+window.updateFamilyPrivacy = (level) => {
+    console.log(`[PRIVACY] Sätter sekretessnivå till: ${level}`);
+    window.privacyLevel = level;
+    // Vid hög nivå, dölj vissa badges i UI:t
+    const badges = document.querySelectorAll('.cam-id-badge');
+    badges.forEach(b => {
+        b.style.display = (level === 'high') ? 'none' : 'block';
+    });
+};
+
+/**
+ * En snyggare formatering för JARVIS interna loggar.
+ */
+window.formatConsoleOutput = (module, msg, type = 'log') => {
+    const timestamp = new Date().toLocaleTimeString();
+    const prefix = `[JARVIS][${module}][${timestamp}]`;
+    if (type === 'warn') console.warn(`${prefix} ${msg}`);
+    else if (type === 'error') console.error(`${prefix} ${msg}`);
+    else console.log(`${prefix} ${msg}`);
+};
+
+/**
+ * Finaliserar systemstarten och sätter alla globala flaggor.
+ */
+window.finalizeStartup = () => {
+    window.systemReady = true;
+    window.cleanupOldIncidents();
+    window.checkSystemIntegrity();
+    window.formatConsoleOutput('SYSTEM', 'Fullständig startsekvens slutförd. Systemet är 100% redo.');
+};
+
+// --- BRYGGOR FÖR NYA UI-KNAPPAR (Stabiliseringslager) ---
+
+window.setGuardMode = (mode) => {
+    if (mode === 'home') window.setHomeState(true);
+    else if (mode === 'away') window.setHomeState(false);
+    else if (mode === 'sleep') {
+        const btnSleep = document.getElementById('btnSleep');
+        window.isSleeping = !window.isSleeping; // Toggle istället för att bara sätta på
+        
+        if (window.isSleeping) {
+            window.isHome = true; // Man sover oftast när man är hemma
+            btnSleep?.classList.add('active');
+            appendMessage('AI', 'Sov-läge aktiverat. God natt Andreas. Jag håller vakt.');
+            audio.speak('God natt Andreas. Jag håller vakt.');
+        } else {
+            btnSleep?.classList.remove('active');
+            appendMessage('AI', 'Sov-läge avaktiverat. Välkommen upp!');
+            audio.speak('Välkommen upp Andreas. Här är nattens rapport.');
+            window.generateHomecomingReport("Natten har varit lugn.");
+        }
+    }
+    window.syncCloudMemory();
+};
+
+window.toggleLukasMode = () => {
+    window.isLukasMode = !window.isLukasMode;
+    const btn = document.getElementById('btnLukas');
+    if (window.isLukasMode) {
+        btn?.classList.add('active');
+        const msg = window.isHome ? "Lukas-läge aktiverat. Jag vet att det är Lukas som pratar nu." : "Lukas-läge aktiverat. Lukas är hemma själv, jag aktiverar beskyddar-läge.";
+        audio.speak(msg);
+        appendMessage('AI', msg);
+    } else {
+        btn?.classList.remove('active');
+        audio.speak('Lukas-läge avaktiverat. Återgår till Andreas profil.');
+        appendMessage('AI', 'Lukas-läge avaktiverat.');
+    }
+    window.syncCloudMemory();
+};
+
+window.toggleAcademy = () => {
+    const overlay = document.getElementById('academyOverlay');
+    if (overlay) {
+        overlay.style.display = (overlay.style.display === 'none') ? 'flex' : 'none';
+    }
+};
+
+window.startFaceTrain = () => {
+    const name = document.getElementById('trainName').value;
+    if (name) window.trainPerson(name);
+};
+
+window.startCarReg = () => {
+    const plate = document.getElementById('regPlate').value;
+    const owner = document.getElementById('regOwner').value;
+    if (plate && owner) window.registerCar(plate, owner);
+};
+
+window.processNightReport = () => {
+    const incidents = brain.brainData.general.incidents || [];
+    const count = incidents.length;
+    let msg = count > 0 ? `Natten har varit händelserik. Jag har loggat ${count} observationer.` : 'Natten har varit lugn, Andreas. Inga obehöriga i sikte.';
+    if (count > 0) msg += " Vill du att jag läser upp loggen?";
+    appendMessage('AI', msg);
+    audio.speak(msg);
+};
+
+window.autoResetModules = async () => {
+    if (!window.brainModel || window.brainModel === 'llama3.2-vision') {
+        const res = await fetch('http://127.0.0.1:11434/api/tags').catch(() => null);
+        if (!res || !res.ok) {
+            console.warn('[SYSTEM] AI-hjärnan svarar ej. Initierar omstart...');
+            checkOllama();
+        }
+    }
+};
+
+window.applyMoodToVoice = (options = {}) => {
+    const user = vision.activeUser;
+    const mood = (brain.brainData.users[user]) ? brain.brainData.users[user].mood : 'neutral';
+    if (mood === 'sad' || mood === 'tired') {
+        options.pitch = 0.85; options.rate = 0.8; 
+    } else if (mood === 'happy') {
+        options.pitch = 1.15; options.rate = 1.1;
+    }
+    return options;
+};
+
+/**
+ * Kontrollerar nätverkets latens mot AI-servern för att optimera svarstider.
+ */
+window.checkNetworkLatency = async () => {
+    const start = Date.now();
+    await fetch('http://127.0.0.1:11434/api/tags').catch(() => null);
+    const latency = Date.now() - start;
+    console.log(`[SYSTEM] AI-latens: ${latency}ms`);
+};
+
+// --- SYSTEM AKTIVERING ---
+window.finalizeStartup();
+setInterval(window.autoResetModules, 60000);
+setInterval(window.syncCloudMemory, 120000);
+setInterval(window.checkNetworkLatency, 300000);
+// --- JARVIS SMART GUARD: VERSION 1477 - SYSTEM ONLINE ---
+

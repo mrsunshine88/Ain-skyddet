@@ -8,7 +8,12 @@ const { app, BrowserWindow, ipcMain, powerSaveBlocker } = require('electron');
 
 const FFMPEG_PATH = `C:\\Users\\perss\\Downloads\\ffmpeg-2026-04-09-git-d3d0b7a5ee-full_build\\ffmpeg-2026-04-09-git-d3d0b7a5ee-full_build\\bin\\ffmpeg.exe`;
 const INCIDENT_DIR = path.join(__dirname, 'incidents');
+const VEHICLE_DIR = path.join(INCIDENT_DIR, 'vehicles');
+const PROFILE_DIR = path.join(__dirname, 'profiles');
+
 if (!fs.existsSync(INCIDENT_DIR)) fs.mkdirSync(INCIDENT_DIR);
+if (!fs.existsSync(VEHICLE_DIR)) fs.mkdirSync(VEHICLE_DIR, { recursive: true });
+if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR);
 
 const CAMERAS = {
     'cam1': { ip: '192.168.50.44', pass: '260889' },
@@ -16,61 +21,66 @@ const CAMERAS = {
     'cam3': { ip: '192.168.50.142', pass: '533493' }
 };
 
-// D-Link DCS-8627LH specifika RTSP-sökvägar!
-const PATHS = ['/live/profile.0', '/live/profile.1', '/live/profile.2', '/video1.sdp', '/video2.sdp', '/video3.sdp'];
-
 let mainWindow;
 
 function logToWindow(msg, type = 'info') {
     console.log(`[${type.toUpperCase()}] ${msg}`);
-    if (mainWindow && mainWindow.webContents) {
-        mainWindow.webContents.executeJavaScript(`console.log("%c[SERVER-${type.toUpperCase()}] ${msg.replace(/"/g, "'")}", "color: ${type==='err'?'red':'#00ff00'}")`);
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+        try {
+            mainWindow.webContents.executeJavaScript(`console.log("%c[SERVER-${type.toUpperCase()}] ${msg.replace(/"/g, "'")}", "color: ${type==='err'?'red':'#00ff00'}")`);
+        } catch (e) {
+            console.error("Kunde inte logga till fönstret:", e);
+        }
     }
 }
 
-function startStream(camId, res, req, pathIdx = 0) {
-    const cam = CAMERAS[camId];
-    if (pathIdx >= PATHS.length) {
-        logToWindow(`${camId}: Kameran nekar åtkomst till alla D-Link sökvägar. Kolla om ONVIF är aktiverat i Mydlink-appen.`, 'err');
-        return res.end();
+const streams = {}; // camId -> { process: ChildProcess, listeners: Set<Response>, lastAttempt: number }
+
+function getStream(camId) {
+    const now = Date.now();
+    const s = streams[camId] || { listeners: new Set(), lastAttempt: 0 };
+    streams[camId] = s;
+
+    if (s.process && !s.process.killed) {
+        return s;
     }
-
-    const currentPath = PATHS[pathIdx];
-    // D-Link kräver alltid 'admin' som username, och PIN-koden (som du angav) som password.
-    const rtspUrl = `rtsp://admin:${cam.pass}@${cam.ip}:554${currentPath}`;
     
-    logToWindow(`[${camId}] Ansluter till D-Link: ${currentPath} ...`, 'info');
-
-    // Tillbaka till grundkommandot utan begränsningar för att låta D-link ansluta hur den vill
+    // Förhindra "spawning loop" pga cooldown
+    if (now - s.lastAttempt < 5000) {
+        return null;
+    }
+    
+    s.lastAttempt = now;
+    logToWindow(`[${camId}] Ansluter till kamera...`, 'info');
+    const cam = CAMERAS[camId];
+    const rtspUrl = `rtsp://admin:${cam.pass}@${cam.ip}:554/live/profile.1`;
+    
     const ff = spawn(FFMPEG_PATH, [
+        '-rtsp_transport', 'tcp',
         '-i', rtspUrl,
         '-f', 'mpjpeg',
         '-q:v', '5',
         '-'
     ]);
 
-    let hasResponded = false;
+    s.process = ff;
 
-    ff.stdout.once('data', () => {
-        hasResponded = true;
-        logToWindow(`BINGO! Bilden rullar från D-Link på ${currentPath}!`, 'info');
-        res.writeHead(200, {
-            'Content-Type': 'multipart/x-mixed-replace; boundary=ffmpeg',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'
-        });
-        ff.stdout.pipe(res);
-    });
-
-    ff.stderr.on('data', d => {
-        const msg = d.toString();
-        if ((msg.includes('Not Found') || msg.includes('401') || msg.includes('Invalid data') || msg.includes('404')) && !hasResponded) {
-            ff.kill();
-            startStream(camId, res, req, pathIdx + 1);
+    ff.stdout.on('data', data => {
+        for (const res of s.listeners) {
+            try {
+                res.write(data);
+            } catch (e) {
+                s.listeners.delete(res);
+            }
         }
     });
 
-    req.on('close', () => ff.kill());
+    ff.on('exit', () => {
+        logToWindow(`[${camId}] Kamera tappade anslutningen. Försöker igen om 5 sek...`, 'warn');
+        s.process = null;
+    });
+
+    return s;
 }
 
 const server = http.createServer((req, res) => {
@@ -78,15 +88,44 @@ const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     
     const camId = url.substring(1).split('?')[0]; 
-    if (CAMERAS[camId] && !url.includes('/audio/') && !url.includes('/api/')) {
-        const cam = CAMERAS[camId];
-        const socket = new net.Socket();
-        socket.setTimeout(2000);
-        socket.on('connect', () => { socket.destroy(); startStream(camId, res, req, 0); });
-        socket.on('timeout', () => { logToWindow(`TIMEOUT: No pings from ${cam.ip}`, 'err'); res.writeHead(504); res.end(); });
-        socket.on('error', () => { logToWindow(`NÄTVERKSFEL: ${cam.ip} offline`, 'err'); res.writeHead(503); res.end(); });
-        socket.connect(554, cam.ip);
+    if (CAMERAS[camId] && !url.includes('/audio/') && !url.startsWith('/api/')) {
+        res.writeHead(200, {
+            'Content-Type': 'multipart/x-mixed-replace; boundary=ffmpeg',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive'
+        });
+
+        const stream = getStream(camId);
+        if (!stream) {
+            res.writeHead(503);
+            return res.end("Kameran startar om. Vänta...");
+        }
+
+        stream.listeners.add(res);
+
+        req.on('close', () => {
+            stream.listeners.delete(res);
+            if (stream.listeners.size === 0 && stream.process) {
+                logToWindow(`[${camId}] Inga tittare kvar, stänger ström.`, 'info');
+                stream.process.kill();
+            }
+        });
         return;
+    }
+
+    if (url.includes('/audio/')) {
+        const aId = url.split('/').pop();
+        if (CAMERAS[aId]) {
+            res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+            const ff = spawn(FFMPEG_PATH, [
+                '-rtsp_transport', 'tcp',
+                '-i', `rtsp://admin:${CAMERAS[aId].pass}@${CAMERAS[aId].ip}:554/live/profile.1`, 
+                '-vn', '-acodec', 'libmp3lame', '-ab', '64k', '-f', 'mp3', '-'
+            ]);
+            ff.stdout.pipe(res);
+            req.on('close', () => ff.kill());
+            return;
+        }
     }
 
     if (url === '/mobile.html' || url === '/mobile.js' || url === '/mobile.css' || url === '/manifest.json' || url === '/sw.js') {
@@ -97,6 +136,7 @@ const server = http.createServer((req, res) => {
             return res.end(fs.readFileSync(p));
         }
     }
+
     if (url.startsWith('/api/chat')) {
         let body = '';
         req.on('data', c => body += c);
@@ -110,46 +150,26 @@ const server = http.createServer((req, res) => {
         });
         return;
     }
-    if (url.includes('/audio/')) {
-        const aId = url.split('/').pop();
-        if (CAMERAS[aId]) {
-            res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
-            const ff = spawn(FFMPEG_PATH, ['-i', `rtsp://admin:${CAMERAS[aId].pass}@${CAMERAS[aId].ip}:554/live/profile.0`, '-vn', '-acodec', 'libmp3lame', '-ab', '64k', '-f', 'mp3', '-']);
-            ff.stdout.pipe(res);
-            req.on('close', () => ff.kill());
-            return;
-        }
-    }
+
     if (url.startsWith('/api/incidents')) {
         const files = fs.readdirSync(INCIDENT_DIR).filter(f => f.endsWith('.jpg')).sort((a,b) => b.localeCompare(a)).slice(0,20);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(files));
         return;
     }
+
     res.writeHead(404); res.end("Not Found");
 });
 
 server.listen(9999, '0.0.0.0', async () => {
     console.log("JARVIS SERVER REDO: 0.0.0.0:9999");
-    
-    // --- NYTT: STARTA SÄKER HTTPS-TUNNEL ---
     try {
         const localtunnel = require('localtunnel');
         const randid = Math.floor(Math.random() * 90000) + 10000;
         const tunnel = await localtunnel({ port: 9999, subdomain: 'jarvis-vakt-' + randid });
-        
-        console.log("");
-        console.log("==================================================");
-        console.log("📱 JARVIS MOBILÅTKOMST (KLAR FÖR PWA/LARM):");
-        console.log(`-> ${tunnel.url}`);
-        console.log("==================================================");
-        console.log("");
-        
-        tunnel.on('close', () => {
-            console.log("Tunneln stängdes.");
-        });
+        console.log(`📱 JARVIS MOBILÅTKOMST (HTTPS): ${tunnel.url}`);
     } catch (e) {
-        console.error("Kunde inte starta säker HTTPS-tunnel:", e);
+        console.error("Kunde inte starta tunnel:", e);
     }
 });
 
@@ -161,16 +181,11 @@ app.on('ready', () => {
             nodeIntegration: true, 
             contextIsolation: false, 
             webSecurity: false,
-            backgroundThrottling: false // Fixar "hjärnsläpp" vid inaktivitet
+            backgroundThrottling: false
         } 
     });
-    
-    // Förhindra att Windows försätter appen/systemet i viloläge
-    const id = powerSaveBlocker.start('prevent-app-suspension');
-    console.log(`POWERSAVE BLOCKER AKTIV: ID ${id}`);
-
+    powerSaveBlocker.start('prevent-app-suspension');
     mainWindow.loadFile('index.html');
-    mainWindow.webContents.openDevTools();
 });
 
 ipcMain.handle('save-snapshot', async (event, { base64, label }) => {
@@ -180,13 +195,18 @@ ipcMain.handle('save-snapshot', async (event, { base64, label }) => {
 });
 
 ipcMain.handle('save-face-image', async (event, { base64, name, index }) => {
-    const profileDir = path.join(__dirname, 'profiles', name);
+    const profileDir = path.join(PROFILE_DIR, name);
     if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
-    
     const fileName = `${name}_${index}.jpg`;
     const filePath = path.join(profileDir, fileName);
-    
     fs.writeFileSync(filePath, base64.replace(/^data:image\/\w+;base64,/, ""), 'base64');
-    logToWindow(`[FACE-SAVE] Sparade fysisk bild: ${fileName} i profiles/${name}`, 'info');
+    logToWindow(`[FACE-SAVE] Sparat ansikte: ${fileName}`, 'info');
+    return filePath;
+});
+
+ipcMain.handle('save-vehicle-image', async (event, { base64, name }) => {
+    const filePath = path.join(VEHICLE_DIR, name);
+    fs.writeFileSync(filePath, base64.replace(/^data:image\/\w+;base64,/, ""), 'base64');
+    logToWindow(`[VEHICLE-SAVE] Sparat fordonsbevis: ${name}`, 'info');
     return filePath;
 });

@@ -82,16 +82,18 @@
             background: #f43f5e; border-color: #f43f5e; color: #fff; 
             box-shadow: 0 0 15px rgba(244, 63, 94, 0.5); animation: heartbeat 1.2s infinite; 
         }
-        #micStatus { position: absolute; bottom: -20px; font-size: 9px; white-space: nowrap; color: var(--accent); opacity: 0.8; font-weight: bold; }
-        #micLevel { position: absolute; bottom: -8px; width: 30px; height: 3px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+        #micStatus { position: absolute; bottom: -20px; font-size: 9px; white-space: nowrap; color: var(--accent); opacity: 0.8; font-weight: bold; width: 100%; text-align: center; left: 0; }
+        #micLevel { position: absolute; bottom: -6px; width: 30px; height: 3px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
         #micBar { height: 100%; width: 0%; background: var(--accent); transition: width 0.1s; }
 
         @keyframes heartbeat { 0% { transform: scale(1); } 50% { transform: scale(1.08); } 100% { transform: scale(1); } }
         
-        .button-row { padding: 0 15px 15px 15px; display: flex; gap: 8px; }
+        .button-row { padding: 0 15px 15px 15px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
         .btn-action { background: var(--accent); border: none; color: #000; font-weight: 800; padding: 12px; border-radius: 8px; cursor: pointer; flex: 2; transition: all 0.2s; box-shadow: 0 4px 12px rgba(0, 242, 255, 0.3); text-transform: uppercase; font-size: 11px; }
-        .btn-outline { background: transparent; border: 1px solid var(--accent); color: var(--accent); padding: 12px; border-radius: 8px; cursor: pointer; font-size: 10px; flex: 1; text-transform: uppercase; transition: all 0.3s ease; }
+        .btn-outline { background: transparent; border: 1px solid var(--accent); color: var(--accent); padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 10px; text-transform: uppercase; transition: all 0.3s ease; white-space: nowrap; }
         .btn-outline.active { background: rgba(0, 242, 255, 0.15); box-shadow: 0 0 20px var(--accent); color: #fff; font-weight: bold; }
+        #btnLukas.active { background: rgba(244, 63, 94, 0.2) !important; border-color: #f43f5e !important; color: #fff !important; box-shadow: 0 0 30px rgba(244, 63, 94, 0.6) !important; animation: lukasPulse 2s infinite; }
+        @keyframes lukasPulse { 0% { box-shadow: 0 0 20px rgba(244, 63, 94, 0.4); } 50% { box-shadow: 0 0 40px rgba(244, 63, 94, 0.8); } 100% { box-shadow: 0 0 20px rgba(244, 63, 94, 0.4); } }
 
         @keyframes breath {
             0% { box-shadow: 0 0 15px var(--accent-dim); border-color: var(--accent-dim); }
@@ -254,11 +256,42 @@
                     <input type="text" id="chatInput" placeholder="Prata med mig direkt...">
                 </div>
                 <div class="button-row">
-                    <button id="btnHome" class="btn-outline active" onclick="window.setHomeState(true)" style="border-color:#00ff88; color:#00ff88;">🏠 HEMMA</button>
-                    <button id="btnAway" class="btn-outline" onclick="window.setHomeState(false)">📱 BORTA</button>
+                    <button id="btnHome" class="btn-outline active" onclick="window.setGuardMode('home')" style="border-color:#00ff88; color:#00ff88;">🏠 HEMMA</button>
+                    <button id="btnAway" class="btn-outline" onclick="window.setGuardMode('away')">📱 BORTA</button>
+                    <button id="btnSleep" class="btn-outline" onclick="window.setGuardMode('sleep')">🛌 SOVA</button>
+                    <button id="btnLukas" class="btn-outline" onclick="window.toggleLukasMode()">👦 LUKAS</button>
                     <button id="btnCameras" class="btn-outline" onclick="window.toggleCameras()">KAMEROR</button>
                     <button id="btnVakt" class="btn-outline" onclick="window.toggleVakt()">VAKTLÄGE</button>
-                    <button onclick="window.initMedia()" class="btn-outline" style="border-color:#555; color:#aaa;">RESET</button>
+                    <button id="btnAcademy" class="btn-outline" onclick="window.toggleAcademy()" style="border-color:var(--accent); color:var(--accent);">🎓 ACADEMY</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Academy Overlay -->
+    <div id="academyOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:10000; align-items:center; justify-content:center;">
+        <div style="background:var(--panel); border:1px solid var(--accent); padding:30px; border-radius:15px; width:400px; box-shadow:0 0 50px var(--accent-dim); font-family: 'Outfit', sans-serif;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                <h2 style="color:var(--accent); margin:0; font-size:18px; letter-spacing:2px;">JARVIS ACADEMY</h2>
+                <button onclick="window.toggleAcademy()" style="background:none; border:none; color:#fff; cursor:pointer; font-size:20px;">✕</button>
+            </div>
+            
+            <div style="display:flex; flex-direction:column; gap:20px;">
+                <div style="border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:20px;">
+                    <h3 style="font-size:12px; opacity:0.6; margin-bottom:10px; color:var(--accent);">TRÄNA ANSIKTE</h3>
+                    <div style="display:flex; gap:10px;">
+                        <input type="text" id="trainName" placeholder="Namn på person..." style="flex:1; background:#000; border:1px solid var(--accent-dim); padding:10px; color:#fff; border-radius:5px; outline:none;">
+                        <button class="btn-action" style="flex:none; padding:10px 20px; font-size:10px;" onclick="window.startFaceTrain()">TRÄNA</button>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 style="font-size:12px; opacity:0.6; margin-bottom:10px; color:var(--accent);">REGISTRERA BIL</h3>
+                    <div style="display:flex; flex-direction:column; gap:12px;">
+                        <input type="text" id="regPlate" placeholder="Regnummer (t.ex. ABC123)..." style="background:#000; border:1px solid var(--accent-dim); padding:10px; color:#fff; border-radius:5px; outline:none;">
+                        <input type="text" id="regOwner" placeholder="Vems bil?..." style="background:#000; border:1px solid var(--accent-dim); padding:10px; color:#fff; border-radius:5px; outline:none;">
+                        <button class="btn-action" style="padding:12px; font-size:10px;" onclick="window.startCarReg()">REGISTRERA FORDON</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -269,5 +302,31 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase.client.js"></script>
     <script type="module" src="app.js"></script>
+    <script>
+        window.toggleAcademy = () => {
+            const overlay = document.getElementById('academyOverlay');
+            overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
+        };
+
+        window.startFaceTrain = () => {
+            const name = document.getElementById('trainName').value;
+            if (name) {
+                window.toggleAcademy();
+                window.trainPerson(name);
+                document.getElementById('trainName').value = '';
+            }
+        };
+
+        window.startCarReg = () => {
+            const plate = document.getElementById('regPlate').value;
+            const owner = document.getElementById('regOwner').value;
+            if (plate && owner) {
+                window.toggleAcademy();
+                window.registerCar(plate, owner);
+                document.getElementById('regPlate').value = '';
+                document.getElementById('regOwner').value = '';
+            }
+        };
+    </script>
 </body>
 </html>
