@@ -1,0 +1,12 @@
+{
+  "name": "ai-ogon-andreas",
+  "version": "1.0.0",
+  "description": "Ansiktsigenkänning med CodeProject.AI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^33.0.0"
+  }
+}

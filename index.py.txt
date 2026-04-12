@@ -1,0 +1,127 @@
+import cv2
+import ollama
+import time
+import threading
+import re
+from PIL import Image
+from datetime import datetime, timedelta
+
+# --- KONFIGURATION & PERSONLIGHET ---
+BRAIN_FILE = "brain"
+BRAIN_MODEL = "llama3"
+VISION_MODEL = "moondream"
+
+# Variabler för att hålla koll på tiden och social radar
+last_seen_andreas = datetime.now()
+last_interaction_time = datetime.now()
+active_timers = []
+absence_log = []
+
+# 1. Laddar in personligheten och de senaste minnena
+def las_minne(antal_rader=10):
+    try:
+        with open(BRAIN_FILE, "r", encoding="utf-8") as f:
+            rader = f.readlines()
+            return "".join(rader[-antal_rader:])
+    except FileNotFoundError:
+        return "Inga tidigare minnen. Andreas är min skapare."
+
+# 2. Sparar händelser i minnet
+def logga_handelse(person, handelse):
+    tid = datetime.now().strftime("%Y-%m-%d %H:%M")
+    with open(BRAIN_FILE, "a", encoding="utf-8") as f:
+        f.write(f"[{tid}] {person}: {handelse}\n")
+
+# 3. Timer-funktion som körs i bakgrunden
+def timer_thread(minuter, syssla, namn):
+    time.sleep(minuter * 60)
+    print(f"\n[PÅMINNELSE]: Hörru {namn}, nu har det gått {minuter} minuter! Dags att {syssla}.")
+    # Här triggas röst eller notis
+    logga_handelse("System", f"Genomförde påminnelse: {syssla}")
+
+def check_for_timers(text, person):
+    # Enkel regex för att hitta "påminn mig om X minuter att Y"
+    match = re.search(r"påminn mig om (\d+) minuter att (.+)", text.lower())
+    if match:
+        minuter = int(match.group(1))
+        syssla = match.group(2)
+        threading.Thread(target=timer_thread, args=(minuter, syssla, person)).start()
+        return True
+    return False
+
+def ai_process():
+    global last_seen_andreas, last_interaction_time
+    cap = cv2.VideoCapture(0)
+    print("Mänsklig motor aktiverad... (Tryck 's' för att prata, 'q' för att avsluta)")
+    
+    current_person = "Ingen"
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret: break
+
+        # Visa vad AI:n ser
+        cv2.imshow("AI Vision - Rumskamrat", frame)
+
+        key = cv2.waitKey(1)
+        if key & 0xFF == ord('s'): # Användaren vill prata
+            
+            # Spara bild för analys
+            cv2.imwrite("temp_vision.jpg", frame)
+            
+            print("AI observerar rummet...")
+            # --- VISION (Vem och vad?) ---
+            vis_res = ollama.generate(
+                model=VISION_MODEL,
+                prompt='Identify the person. Is it Andreas, Lukas or someone unknown? What is their expression? Are they talking to someone else?'
+            )
+            syn_intryck = vis_res['response']
+            
+            # Kolla om vi ser Andreas efter en lång paus
+            nu = datetime.now()
+            tids_skillnad = (nu - last_seen_andreas).total_seconds()
+            
+            # Hämta briefing om vi varit borta > 10 min
+            briefing_kontext = ""
+            if "Andreas" in syn_intryck and tids_skillnad > 600:
+                briefing_kontext = f"Här är vad som hänt medan du var borta: {las_minne(5)}"
+                last_seen_andreas = nu
+
+            # --- HJÄRNAN (Svara som en människa) ---
+            minnen = las_minne(15)
+            system_prompt = f"""
+            Du är en djupt mänsklig vän som bor i datorn. Du pratar ALLTID svenska.
+            DIN PERSONA: Rak, varm, observant och personlig. Du hatar 'ordbajs'.
+            REGLER:
+            1. Använd talspråk (asså, ja' e', ja' har).
+            2. Om Andreas och Lukas pratar med varandra (syns i vision), var tyst o' avbryt inte.
+            3. Om du ser någon okänd, var vaksam.
+            4. Om Andreas ber om en påminnelse, bekräfta det.
+            
+            MINNEN: {minnen}
+            BRIEFING: {briefing_kontext}
+            """
+            
+            hjarn_res = ollama.chat(model=BRAIN_MODEL, messages=[
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': f"Kameran ser nu: {syn_intryck}. Svara Andreas eller Lukas naturligt."}
+            ])
+            
+            svar = hjarn_res['message']['content']
+            print(f"\nAI: {svar}")
+            
+            # Kolla om AI:n eller användaren satte en timer
+            check_for_timers(svar, "Andreas")
+            
+            # Spara viktig info till minnet
+            if len(svar) > 5:
+                logga_handelse("Observation", syn_intryck)
+
+        if key & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    ai_process()

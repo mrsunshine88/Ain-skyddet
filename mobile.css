@@ -1,0 +1,208 @@
+:root {
+    --bg: #030608;
+    --panel: #0d1217;
+    --accent: #00f2ff;
+    --accent-dim: rgba(0, 242, 255, 0.15);
+    --text: #e0faff;
+    --ai-msg: #1a2a33;
+    --user-msg: #243542;
+    --danger: #f43f5e;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+body, html {
+    margin: 0; padding: 0;
+    width: 100vw; height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, sans-serif;
+    overflow: hidden;
+}
+
+#app {
+    display: flex; flex-direction: column;
+    height: 100vh; width: 100%;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Header */
+header {
+    height: 50px;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0 20px;
+    background: rgba(13, 18, 23, 0.8);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--accent-dim);
+    z-index: 100;
+}
+
+.status-pill {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 800; letter-spacing: 1px;
+    color: var(--accent);
+}
+
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #00ff88; box-shadow: 0 0 10px #00ff88; }
+
+/* Camera Section */
+.cam-viewport {
+    background: #000;
+    width: 100%;
+    position: sticky; top: 0;
+    z-index: 50;
+    border-bottom: 2px solid var(--accent-dim);
+}
+
+.main-cam {
+    width: 100%; aspect-ratio: 16/9;
+    background: #000;
+    position: relative;
+    overflow: hidden;
+}
+
+#activeCam {
+    width: 100%; height: 100%; object-fit: contain;
+}
+
+.cam-overlay {
+    position: absolute; bottom: 10px; left: 10px;
+    background: rgba(0,0,0,0.7);
+    padding: 4px 10px; border-radius: 4px; border: 1px solid var(--accent-dim);
+    font-size: 10px; font-weight: 900; color: var(--accent);
+}
+
+.cam-controls {
+    display: flex; justify-content: space-around;
+    padding: 10px; background: var(--panel);
+}
+
+.cam-selector {
+    background: transparent; border: 1px solid var(--accent-dim);
+    width: 60px; height: 45px; border-radius: 8px;
+    font-size: 20px; color: #fff;
+}
+
+.cam-selector.active {
+    border-color: var(--accent); background: var(--accent-dim);
+    box-shadow: 0 0 15px var(--accent-dim);
+}
+
+/* Chat Viewport */
+.chat-viewport {
+    flex-grow: 1;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+}
+
+#chatMessages {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 15px;
+    display: flex; flex-direction: column; gap: 10px;
+    background: linear-gradient(to bottom, #030608, #000);
+}
+
+.msg {
+    max-width: 85%; padding: 10px 14px; border-radius: 14px;
+    font-size: 14px; line-height: 1.4;
+}
+
+.msg.ai { align-self: flex-start; background: var(--ai-msg); border-bottom-left-radius: 4px; border-left: 2px solid var(--accent); box-shadow: 2px 2px 5px rgba(0,0,0,0.2); }
+.msg.user { align-self: flex-end; background: var(--user-msg); border-bottom-right-radius: 4px; }
+
+/* Interaction Zone */
+.interaction-area {
+    padding: 15px;
+    background: var(--panel);
+    border-top: 1px solid var(--accent-dim);
+}
+
+.input-row {
+    display: flex; gap: 10px; margin-bottom: 12px;
+}
+
+#chatInput {
+    flex-grow: 1; background: #000; border: 1px solid var(--accent-dim);
+    color: #fff; padding: 12px; border-radius: 10px; font-size: 14px; outline: none;
+}
+
+.btn-icon, .btn-send {
+    width: 46px; height: 46px; border-radius: 10px; border: none; font-size: 18px;
+}
+
+.btn-icon { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent-dim); }
+.btn-send { background: var(--accent); color: #000; }
+
+.quick-actions {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+
+.btn-action, .btn-vakt {
+    padding: 12px; border-radius: 8px; border: 1px solid var(--accent-dim);
+    background: transparent; color: var(--accent); font-weight: 800; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+
+.btn-vakt { grid-column: span 2; border-color: var(--accent); }
+.btn-vakt.active { background: var(--accent); color: #000; box-shadow: 0 0 20px var(--accent-dim); }
+
+/* Volume Slider */
+.volume-control {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(0,0,0,0.4); padding: 8px 15px;
+    border-radius: 10px; margin-bottom: 15px;
+    border: 1px solid var(--accent-dim);
+}
+.volume-control input { flex-grow: 1; accent-color: var(--accent); }
+.volume-control span { font-size: 14px; }
+
+/* Gallery Modal */
+.modal {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.95); z-index: 1000;
+}
+
+.modal-content {
+    background: var(--bg); width: 100%; height: 100%;
+    display: flex; flex-direction: column;
+}
+
+.modal-header {
+    padding: 20px; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--accent-dim);
+}
+
+.gallery-grid {
+    flex-grow: 1; overflow-y: auto; padding: 10px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+
+.gallery-item {
+    background: var(--panel); border-radius: 10px; overflow: hidden; aspect-ratio: 1; position: relative;
+    border: 1px solid var(--accent-dim);
+}
+
+.gallery-item img { width: 100%; height: 100%; object-fit: cover; }
+.item-label { position: absolute; bottom: 0; width: 100%; background: rgba(0,0,0,0.7); font-size: 9px; padding: 5px; text-align: center; color: var(--accent); }
+
+/* --- ID BADGE MOBILE --- */
+.cam-id-badge {
+    position: absolute; bottom: 10px; right: 10px;
+    background: rgba(0,0,0,0.8); padding: 4px 10px;
+    border-radius: 6px; font-size: 10px; font-weight: 900;
+    color: #fff; text-transform: uppercase; letter-spacing: 1px;
+    border: 1px solid rgba(255,255,255,0.2);
+    transition: all 0.3s ease;
+    display: none; /* Dölj som standard */
+}
+.cam-id-badge.active { display: block; animation: badgePulse 2s infinite; }
+.cam-id-badge.identified { border-color: #00f2ff; color: #00f2ff; box-shadow: 0 0 10px rgba(0, 242, 255, 0.3); }
+.cam-id-badge.unknown { border-color: #f43f5e; color: #f43f5e; box-shadow: 0 0 10px rgba(244, 63, 94, 0.3); }
+
+@keyframes badgePulse {
+    0% { opacity: 0.8; }
+    50% { opacity: 1; }
+    100% { opacity: 0.8; }
+}
