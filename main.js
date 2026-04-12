@@ -129,8 +129,28 @@ const server = http.createServer((req, res) => {
     res.writeHead(404); res.end("Not Found");
 });
 
-server.listen(9999, '0.0.0.0', () => {
+server.listen(9999, '0.0.0.0', async () => {
     console.log("JARVIS SERVER REDO: 0.0.0.0:9999");
+    
+    // --- NYTT: STARTA SÄKER HTTPS-TUNNEL ---
+    try {
+        const localtunnel = require('localtunnel');
+        const randid = Math.floor(Math.random() * 90000) + 10000;
+        const tunnel = await localtunnel({ port: 9999, subdomain: 'jarvis-vakt-' + randid });
+        
+        console.log("");
+        console.log("==================================================");
+        console.log("📱 JARVIS MOBILÅTKOMST (KLAR FÖR PWA/LARM):");
+        console.log(`-> ${tunnel.url}`);
+        console.log("==================================================");
+        console.log("");
+        
+        tunnel.on('close', () => {
+            console.log("Tunneln stängdes.");
+        });
+    } catch (e) {
+        console.error("Kunde inte starta säker HTTPS-tunnel:", e);
+    }
 });
 
 app.on('ready', () => {

@@ -182,13 +182,19 @@ export class Brain {
         if (person === "Okänd" || !userMsg || !aiMsg) return;
         
         const prompt = `Analysera detta samtal mellan ${person} och AI. 
-        Lärde sig AI:n något nytt om ${person}? (Intressen, relationer, vad de gör).
+        Lärde sig AI:n något nytt? Detta inkluderar ALLT – rädslor, drömmar, utseende, jobb, intressen, bilar, familjemedlemmar, rutiner, egenskaper eller detaljer om huset.
+        
         Samtal:
         ${person}: ${userMsg}
         AI: ${aiMsg}
         
-        Svara ENDAST i formatet: FAKTA: [nytt faktum om personen på svenska].
-        Om inget nytt lärdes ut, svara ordet: INGET`;
+        Svara ENDAST i formatet: [NAMN PÅ PERSONEN]: [faktum]. 
+        Exempel 1: Andreas: Är polis och älskar kaffe.
+        Exempel 2: Helena: Äger en Volvo V70 (nuf786) och brukar sluta sent.
+        Exempel 3: Lukas: Är mörkrädd och spelar mycket Minecraft.
+        Exempel 4: Allmänt: Koden till garaget är 1234.
+        
+        Om absolut ingenting av värde sas, svara ordet: INGET`;
 
         try {
             const res = await fetch('http://127.0.0.1:11434/api/generate', {
@@ -197,26 +203,28 @@ export class Brain {
                     model: window.brainModel || 'llama3.2-vision', 
                     prompt, 
                     stream: false,
-                    options: { num_ctx: 1024, num_predict: 64, temperature: 0.1 }
+                    options: { num_ctx: 1024, num_predict: 128, temperature: 0.1 }
                 })
             });
             const data = await res.json();
             const response = data.response.trim();
 
-            if (response.startsWith("FAKTA:")) {
-                const fact = response.replace("FAKTA:", "").trim();
-                const isMinecraft = fact.toLowerCase().includes("minecraft");
+            if (response.includes(":") && !response.includes("INGET")) {
+                const parts = response.split(":");
+                const targetName = parts[0].trim().substring(0, 20); // Försäkra ingen galen formatering
+                const fact = parts.slice(1).join(":").trim();
                 
-                if (!this.brainData.users[person]) {
-                    this.brainData.users[person] = { facts: [], affinity: 50 };
-                }
-                
-                const finalFact = (person === "Sonen" && isMinecraft) ? `⭐ VIKTIGT: ${fact}` : fact;
-
-                if (!this.brainData.users[person].facts.includes(finalFact)) {
-                    this.brainData.users[person].facts.push(finalFact);
-                    this.logEvent("System", `Lärde mig något nytt om ${person}: ${finalFact}`);
-                    this.saveBrain();
+                if (targetName && fact) {
+                    const normalizedName = targetName === "Allmänt" ? "Allmänt" : targetName;
+                    if (!this.brainData.users[normalizedName]) {
+                        this.brainData.users[normalizedName] = { facts: [], affinity: 50 };
+                    }
+                    
+                    if (!this.brainData.users[normalizedName].facts.includes(fact)) {
+                        this.brainData.users[normalizedName].facts.push(fact);
+                        this.logEvent("System", `Lärde mig något nytt om ${normalizedName}: ${fact}`);
+                        this.saveBrain();
+                    }
                 }
             }
         } catch (e) { console.error("Fact extraction failed:", e); }

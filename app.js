@@ -990,7 +990,16 @@ async function askAI(text, source = "text", remoteRecipient = null) {
             console.log("[VAKT] Bekräftad identitet: Andreas vid tangentbordet.");
         }
 
-    const memories = JSON.stringify(brain.brainData.users[targetPerson] || { facts: [] });
+    // Samla ALLA kända fakta om familjen, bilar och inställningar så AI:n har full kontext
+    let allMemories = "";
+    if (brain.brainData.users) {
+        for (const [name, data] of Object.entries(brain.brainData.users)) {
+            if (data.facts && data.facts.length > 0) {
+                 allMemories += `Fakta om ${name.toUpperCase()}: ${data.facts.join(". ")}. `;
+            }
+        }
+    }
+    const memories = allMemories.trim() || "Inga fakta lagrade ännu.";
     const lastDiary = brain.brainData.diary?.slice(-1)[0] || "Ingen dagbok än.";
         const timeStr = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
         
@@ -1003,7 +1012,7 @@ async function askAI(text, source = "text", remoteRecipient = null) {
             ? "# SÄKERHETSVAKTS-LÄGE AKTIVERAT: En okänd person sitter vid Andreas dator. Var professionellt misstänksam, kräv identifiering och hälsa dem absolut INTE välkomna. Du är vaktchef här.\n"
             : "# PARTNER-LÄGE: Du pratar med Andreas eller hans familj. Var lojal, varm och hjälpsam.\n";
 
-        let sysPrompt = `${sysHeader}# DIN IDENTITET: ${brain.brainData.general.identity}\n# ABSOLUT REGEL: Svara ENBART på SVENSKA. Svara ALLTID extremt kort (högst 2 meningar).\n# KLOCKAN ÄR ${timeStr}.\n# SITTID IDAG: Du ser att han suttit här i ${sittingDisplay}.\n# MINNEN AV ${targetPerson.toUpperCase()}: ${memories}\n${brain.brainData.general.personality}`;
+        let sysPrompt = `${sysHeader}# DIN IDENTITET: ${brain.brainData.general.identity}\n# ABSOLUT REGEL: Svara ENBART på SVENSKA. Svara ALLTID extremt kort (högst 2 meningar).\n# KLOCKAN ÄR ${timeStr}.\n# SITTID IDAG: Du ser att han suttit här i ${sittingDisplay}.\n# GLOBAL MINNESBANK (Vem som äger vad etc): ${memories}\n${brain.brainData.general.personality}`;
 
         const fullOutput = await brain.getOllamaResponse(window.brainModel, [
             { role: 'system', content: sysPrompt },

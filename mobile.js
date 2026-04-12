@@ -84,8 +84,16 @@ window.processLogin = async () => {
         
         setTimeout(() => {
             document.getElementById('loginOverlay').style.display = 'none';
-            // Visa Setup-rutan om Push inte är godkänt
-            if (Notification.permission !== 'granted') {
+            
+            // Kolla om vi redan ÄR en app (PWA)
+            const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+            if (isPWA) {
+                const btn = document.getElementById('installBtn');
+                if(btn) btn.style.display = 'none';
+            }
+            
+            // Visa Setup-rutan om Push inte är godkänt ELLER om vi har en väntande App-installation (vissa webbläsare gömmer den annars)
+            if (Notification.permission !== 'granted' || (window.deferredPrompt && !isPWA)) {
                 document.getElementById('setupOverlay').style.display = 'flex';
             } else {
                 window.subscribeToPush();
@@ -152,6 +160,14 @@ if (window.supabase) {
             // Visa om det är till mig, till 'all', eller om jag är Admin
             if (isAdmin || (activeSession && (msg.recipient_name === activeSession.name || msg.recipient_name === 'all'))) {
                 appendMessage(msg.sender, msg.content);
+                
+                // Läs upp med röst om det är JARVIS som pratar
+                if (msg.sender === 'AI' || msg.sender === 'System') {
+                    const utterance = new SpeechSynthesisUtterance(msg.content.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')); // Ta bort emojis
+                    utterance.lang = 'sv-SE';
+                    utterance.volume = window.jarvisVolume || 0.8;
+                    window.speechSynthesis.speak(utterance);
+                }
             }
         })
         .subscribe();
@@ -181,22 +197,26 @@ if (window.supabase) {
 }
 
 // --- PWA INSTALLATION HELPER ---
-let deferredPrompt;
+window.deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
-    deferredPrompt = e;
+    window.deferredPrompt = e;
     const installBtn = document.getElementById('installBtn');
     if (installBtn) installBtn.style.display = 'block';
 });
 
 window.installApp = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
+    if (!window.deferredPrompt) return;
+    window.deferredPrompt.prompt();
+    const { outcome } = await window.deferredPrompt.userChoice;
     if (outcome === 'accepted') {
         document.getElementById('installBtn').style.display = 'none';
+        
+        if (Notification.permission === 'granted') {
+             document.getElementById('setupOverlay').style.display = 'none';
+        }
     }
-    deferredPrompt = null;
+    window.deferredPrompt = null;
 };
 
 // --- PRO-PUSH SUBSCRIPTION LOGIC ---
@@ -215,7 +235,8 @@ window.subscribeToPush = async () => {
         document.getElementById('pushBtn').style.display = 'none';
         
         // Om även installBtn är borta kan vi stänga hela rutan
-        if (document.getElementById('installBtn').style.display === 'none') {
+        const noInstall = document.getElementById('installBtn').style.display === 'none';
+        if (noInstall || window.matchMedia('(display-mode: standalone)').matches) {
             document.getElementById('setupOverlay').style.display = 'none';
         }
 
@@ -307,6 +328,49 @@ function updateUIPermissions() {
     }
 }
 updateUIPermissions(); // Kör vid start
+
+// --- MOBIL RÖST-STYRNING ---
+const voiceBtn = document.getElementById('voiceBtn');
+const SpeechR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+if (SpeechR && voiceBtn) {
+    const recognition = new SpeechR();
+    recognition.lang = 'sv-SE';
+    recognition.interimResults = false;
+    
+    let isListening = false;
+    
+    recognition.onstart = () => {
+        isListening = true;
+        voiceBtn.style.background = '#f43f5e';
+        chatInput.placeholder = "Lyssnar...";
+    };
+    
+    recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        chatInput.value = text;
+        askAI();
+    };
+    
+    recognition.onerror = () => {
+        voiceBtn.style.background = 'transparent';
+        chatInput.placeholder = "Prata med JARVIS...";
+        isListening = false;
+    };
+    
+    recognition.onend = () => {
+        voiceBtn.style.background = 'transparent';
+        chatInput.placeholder = "Prata med JARVIS...";
+        isListening = false;
+    };
+    
+    voiceBtn.onclick = () => {
+        if (isListening) recognition.stop();
+        else recognition.start();
+    };
+} else {
+    if (voiceBtn) voiceBtn.style.display = 'none'; // Göm om mobilen inte stödjer det
+}
 
 // --- Events ---
 sendBtn.onclick = () => askAI();
