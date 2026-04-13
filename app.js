@@ -4,6 +4,8 @@ import { AudioHandler } from './audio.js';
 import { initSecurity } from './app_security.js';
 import { initLogic } from './app_logic.js';
 
+const { ipcRenderer } = require('electron');
+
 // --- GLOBALA VARS ---
 let brain, vision, audio;
 let ui = {};
@@ -27,6 +29,32 @@ window.isHome = true;
 window.isSleeping = false;
 window.isLukasMode = false;
 window.vaktMode = false;
+
+window.checkHealth = async () => {
+    try {
+        const res = await fetch('http://127.0.0.1:9999/api/health'); // Ändrat till 127.0.0.1 för högre stabilitet
+        if (!res.ok) throw new Error("Health check failed");
+        const data = await res.json();
+        
+        for (const camId in data.cameras) {
+            const status = data.cameras[camId];
+            const led = document.getElementById(`led-${camId}`);
+            if (led) {
+                led.className = `status-led status-${status}`;
+            }
+        }
+        
+        if (data.frigate !== 'online') {
+            console.warn(`[FRIGATE] Status: ${data.frigate}`);
+        }
+    } catch (e) {
+        console.error("[HEALTH] Kunde inte nå JARVIS-servern:", e);
+        for (let i = 1; i <= 3; i++) {
+            const led = document.getElementById(`led-cam${i}`);
+            if (led) led.className = `status-led status-offline`;
+        }
+    }
+};
 
 // --- INIT ---
 async function init() {
@@ -123,6 +151,7 @@ async function init() {
     setInterval(checkDreamState, 60000);
     setInterval(timeCheckLoop, 60000);
     setInterval(accumulateSittingTime, 10000);
+    setInterval(window.checkHealth, 3000); // Kolla hälsan var 3:e sekund
 
     console.log("Start-sekvens avslutad.");
     window.appendMessage('AI', "Återställd! Alla system är nu uppdelade och online.");
@@ -191,7 +220,7 @@ async function initMedia() {
         });
 
         if (ui.statusText) ui.statusText.innerText = "SENSORER: ONLINE";
-        window.startSecurityLoop();
+        // window.startSecurityLoop(); // AVAKTIVERAD: Vi förlitar oss helt på Frigate för larm nu.
     } catch (e) {
         console.warn("Media init misslyckades:", e);
     }
@@ -255,5 +284,48 @@ window.processLogin = async () => {
         }
     }
 };
+
+// --- SMARTARE NOTISER - FRIGATE INTEGRATION ---
+ipcRenderer.on('frigate-event', async (event, data) => {
+    const after = data.after;
+    if (!after || !after.id) return;
+
+    // Endast larm för person, bil och djur
+    const targets = ["person", "car", "motorcycle", "dog", "cat"];
+    if (!targets.includes(after.label)) return;
+
+    // Förhindra dubbla larm för samma objekt inom 30 sekunder
+    const alertKey = `mqtt_${after.id}`;
+    if (window.lastAlerts[alertKey]) return;
+    window.lastAlerts[alertKey] = true;
+    setTimeout(() => { delete window.lastAlerts[alertKey]; }, 30000);
+
+    console.log(`[FRIGATE-MQTT] Händelse mottagen: ${after.label} vid ${after.camera}`);
+    
+    // 1. Hämta bild från Frigate
+    const snap = await vision.getSnapshotFromFrigate(after.id);
+    if (!snap) return;
+    
+    window.lastIntruderSnap = snap;
+
+    // 2. Kör AI-analys (Vision)
+    const analysis = await vision.analyzeIntruder(snap, after.label);
+    
+    // 3. Skapa meddelande
+    let cleanDesc = analysis.description.replace(/\[.*?\]/g, '').replace(/\*\*/g, '').trim();
+    const incidentMsg = `Varning! En ${after.label === 'person' ? 'person' : 'detalj'} syns vid ${after.camera}. ${cleanDesc}`;
+
+    // 4. CHATT + TAL (Enligt användarens önskemål)
+    window.appendMessage('AI', `🚨 [FRIGATE AKTIVITET]: ${incidentMsg}`);
+    audio.speak(incidentMsg);
+
+    // Spara i incidentloggen
+    if (!window.incidents) window.incidents = [];
+    window.incidents.push({ 
+        time: new Date().toLocaleTimeString(), 
+        detail: incidentMsg,
+        snap: snap
+    });
+});
 
 window.onload = init;

@@ -429,7 +429,7 @@ export class Vision {
         if (!eventId) return null;
         try {
             // Frigates API för att hämta "best.jpg" av en specifik händelse
-            const res = await fetch(`http://127.0.0.1:8971/api/events/${eventId}/snapshot.jpg?crop=1&quality=100`);
+            const res = await fetch(`http://127.0.0.1:5050/api/events/${eventId}/snapshot.jpg`);
             if (!res.ok) return null;
             const blob = await res.blob();
             return new Promise((resolve) => {

@@ -30,7 +30,7 @@ export function initSecurity(ui, vision, audio, brain) {
         
         setInterval(async () => {
             // Prioritet 1: Global AI-spärr för att spara GPU (100%-fixen)
-            if (window.isOllamaBusy || window.isThinking || window.isAnalyzingIntruder) return;
+            if (window.isOllamaBusy || window.isThinking) return;
 
             const isVaktActive = window.vaktMode || window.isSleeping || !window.isHome;
             
@@ -66,11 +66,12 @@ export function initSecurity(ui, vision, audio, brain) {
                     }
                 }
 
-                // 2. SYN & OBJEKT
-                const objects = await vision.detectObjects(cam);
-                const targets = ["person", "car", "truck", "motorcycle"];
-                // Höjt tröskelvärde till 0.75 / 0.80 för att vara extremt restriktiv (enligt instruktion)
-                let found = objects.filter(o => targets.includes(o.label) && o.confidence > (isVaktActive ? 0.75 : 0.80));
+                // --- NY DYNAMISK TRÖSKEL (Mörkerseende) ---
+                const hour = new Date().getHours();
+                const isNight = hour >= 21 || hour < 6;
+                const dynamicThreshold = isNight ? 0.45 : 0.75;
+
+                let found = objects.filter(o => targets.includes(o.label) && o.confidence > dynamicThreshold);
 
                 if (found.length > 0) {
                     const currentObj = found[0];

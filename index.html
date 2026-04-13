@@ -122,7 +122,25 @@
         }
         .cam-slot { background: #080c10; border-radius: 12px; overflow: hidden; position: relative; border: 1px solid var(--accent-dim); }
         .cam-slot img, .cam-slot video { width: 100%; height: 100%; object-fit: cover; }
-        .cam-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 2px 8px; border-radius: 4px; font-size: 9px; color: var(--accent); text-transform: uppercase; font-weight: bold; }
+        .cam-label { 
+            position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); 
+            padding: 2px 8px; border-radius: 4px; font-size: 9px; color: var(--accent); 
+            text-transform: uppercase; font-weight: bold;
+        }
+        .status-led {
+            position: absolute; top: 10px; right: 10px;
+            width: 10px; height: 10px; border-radius: 50%; background: #444;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5); transition: all 0.3s ease;
+            z-index: 10;
+        }
+        .status-online { background: #10b981; box-shadow: 0 0 10px rgba(16, 185, 129, 0.6); animation: pulse-green 2s infinite; }
+        .status-buffering { background: #f59e0b; box-shadow: 0 0 10px rgba(245, 158, 11, 0.6); }
+        .status-offline { background: #ef4444; box-shadow: 0 0 10px rgba(239, 68, 68, 0.6); }
+        @keyframes pulse-green {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
         .camera-section.single #camGrid { display: none; }
         .camera-section.grid #webcam { display: none; }
         .camera-section.grid .overlay { display: none; }
@@ -215,18 +233,21 @@
                 </div>
                 <div class="cam-slot">
                     <img id="extCam1" src="http://localhost:9999/cam1">
+                    <div id="led-cam1" class="status-led"></div>
                     <div class="cam-label">Zone 1 / Ytterdörren</div>
                     <div id="idBadgeZone1" class="cam-id-badge">IDENTIFIERAD</div>
                     <audio id="extAud1" src="http://localhost:9999/audio/cam1" muted autoplay></audio>
                 </div>
                 <div class="cam-slot">
                     <img id="extCam2" src="http://localhost:9999/cam2">
+                    <div id="led-cam2" class="status-led"></div>
                     <div class="cam-label">Zone 2 / Infarten</div>
                     <div id="idBadgeZone2" class="cam-id-badge">IDENTIFIERAD</div>
                     <audio id="extAud2" src="http://localhost:9999/audio/cam2" muted autoplay></audio>
                 </div>
                 <div class="cam-slot">
                     <img id="extCam3" src="http://localhost:9999/cam3">
+                    <div id="led-cam3" class="status-led"></div>
                     <div class="cam-label">Zone 3 / Garaget</div>
                     <div id="idBadgeZone3" class="cam-id-badge">IDENTIFIERAD</div>
                     <audio id="extAud3" src="http://localhost:9999/audio/cam3" muted autoplay></audio>

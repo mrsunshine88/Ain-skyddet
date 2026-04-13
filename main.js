@@ -5,6 +5,13 @@ const { spawn } = require('child_process');
 const os = require('os');
 const net = require('net');
 const { app, BrowserWindow, ipcMain, powerSaveBlocker } = require('electron');
+const mqtt = require('mqtt');
+
+// Globalt fångstnät för att förhindra krascher vid nätverksfel (t.ex. LocalTunnel)
+process.on('uncaughtException', (error) => {
+    console.error('⚠️ Obehandlat fel fångat:', error);
+});
+
 
 const FFMPEG_PATH = `C:\\Users\\perss\\Downloads\\ffmpeg-2026-04-09-git-d3d0b7a5ee-full_build\\ffmpeg-2026-04-09-git-d3d0b7a5ee-full_build\\bin\\ffmpeg.exe`;
 const INCIDENT_DIR = path.join(__dirname, 'incidents');
@@ -34,7 +41,7 @@ function logToWindow(msg, type = 'info') {
     }
 }
 
-const streams = {}; // camId -> { process: ChildProcess, listeners: Set<Response>, lastAttempt: number }
+const streams = {}; // camId -> { process: ChildProcess, listeners: Set<Response>, lastAttempt: number, lastDataTime: number }
 
 function getStream(camId) {
     const now = Date.now();
@@ -66,6 +73,7 @@ function getStream(camId) {
     s.process = ff;
 
     ff.stdout.on('data', data => {
+        s.lastDataTime = Date.now();
         for (const res of s.listeners) {
             try {
                 res.write(data);
@@ -151,10 +159,41 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    if (url.startsWith('/api/incidents')) {
-        const files = fs.readdirSync(INCIDENT_DIR).filter(f => f.endsWith('.jpg')).sort((a,b) => b.localeCompare(a)).slice(0,20);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(files));
+    if (url.startsWith('/api/health')) {
+        logToWindow("[HEALTH] Kontrollerar kameror...", 'info');
+        const status = {};
+        for (const id in CAMERAS) {
+            const s = streams[id];
+            const isAlive = s && s.process && !s.process.killed;
+            const dataAge = s ? (Date.now() - (s.lastDataTime || 0)) : 999999;
+            
+            if (!isAlive) status[id] = 'offline';
+            else if (dataAge < 5000) status[id] = 'online';
+            else status[id] = 'buffering';
+        }
+
+        const frigateReq = http.request({ hostname: '127.0.0.1', port: 5050, path: '/api/stats', timeout: 1000 }, (fRes) => {
+            let data = '';
+            fRes.on('data', c => data += c);
+            fRes.on('end', () => {
+                try {
+                    const stats = JSON.parse(data);
+                    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ cameras: status, frigate: 'online', frigateStats: stats }));
+                    logToWindow("[HEALTH] Frigate Online", 'info');
+                } catch(e) {
+                    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                    res.end(JSON.stringify({ cameras: status, frigate: 'error' }));
+                    logToWindow("[HEALTH] Frigate JSON-fel", 'err');
+                }
+            });
+        });
+        frigateReq.on('error', () => {
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            res.end(JSON.stringify({ cameras: status, frigate: 'offline' }));
+            logToWindow("[HEALTH] Frigate Offline (Hjärnan svarar ej)", 'warn');
+        });
+        frigateReq.end();
         return;
     }
 
@@ -167,9 +206,14 @@ server.listen(9999, '0.0.0.0', async () => {
         const localtunnel = require('localtunnel');
         const randid = Math.floor(Math.random() * 90000) + 10000;
         const tunnel = await localtunnel({ port: 9999, subdomain: 'jarvis-vakt-' + randid });
+        
+        tunnel.on('error', (err) => {
+            console.error("📱 Tunnel-fel under körning:", err);
+        });
+
         console.log(`📱 JARVIS MOBILÅTKOMST (HTTPS): ${tunnel.url}`);
     } catch (e) {
-        console.error("Kunde inte starta tunnel:", e);
+        console.error("📱 Kunde inte starta tunnel:", e);
     }
 });
 
@@ -209,4 +253,28 @@ ipcMain.handle('save-vehicle-image', async (event, { base64, name }) => {
     fs.writeFileSync(filePath, base64.replace(/^data:image\/\w+;base64,/, ""), 'base64');
     logToWindow(`[VEHICLE-SAVE] Sparat fordonsbevis: ${name}`, 'info');
     return filePath;
+});
+
+// --- MQTT BRYGGA FÖR FRIGATE ---
+const mqttClient = mqtt.connect('mqtt://localhost:1883');
+
+mqttClient.on('connect', () => {
+    logToWindow("MQTT: Ansluten till mäklaren (localhost:1883)", 'info');
+    mqttClient.subscribe('frigate/events');
+});
+
+mqttClient.on('message', (topic, message) => {
+    if (topic === 'frigate/events') {
+        try {
+            const event = JSON.parse(message.toString());
+            // Skicka bara vidare intressanta händelser (nya eller stora ändringar)
+            if (event.type === 'new' || (event.type === 'update' && event.after.stationary === false)) {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('frigate-event', event);
+                }
+            }
+        } catch (e) {
+            console.error("MQTT: Fel vid parsing av Frigate-event:", e);
+        }
+    }
 });
