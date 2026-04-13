@@ -33,8 +33,8 @@ export class Vision {
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'system', content: "Du är en AI-assistent som analyserar någons ansikte för att förstå humör och blick. Svara extremt kort på svenska." },
-                        { role: 'user', content: "Analyze the person. 1. Mood (happy, tired, etc). 2. Gaze (looking at camera/screen?). Use 'du'. Max 6 words.", images: [img] }
+                        { role: 'system', content: "Du är en AI-assistent som observerar personen framför dig. Beskriv kortfattat hur personen verkar må och om de ser ut att vara uppmärksamma på dig. Skriv naturligt, som en vän." },
+                        { role: 'user', content: "Beskriv personen och deras humör/fokus. Max 6 ord.", images: [img] }
                     ],
                     stream: false
                 })
@@ -231,6 +231,26 @@ export class Vision {
 
     // --- NYTT: AKTIVT ANSIKTSMINNE ---
     // Möjliggör The AI att "träna" in ett ansikte i efterhand direkt från utekamerans larmbild
+    async recognizeFaceFromBase64(base64) {
+        if (!base64) return null;
+        try {
+            const rawBase64 = base64.replace(/^data:image\/jpeg;base64,/, "");
+            const res = await fetch('http://127.0.0.1:32168/v1/vision/face/recognize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: rawBase64, min_confidence: 0.5 })
+            });
+            const data = await res.json();
+            if (data.success && data.predictions && data.predictions.length > 0) {
+                const best = data.predictions[0];
+                if (best.userid && best.userid !== "unknown") return best.userid;
+            }
+        } catch (e) {
+            console.error("[VISION] Ansiktsigenkänning misslyckades:", e);
+        }
+        return null;
+    }
+
     async registerFaceFromBase64(name, base64Image) {
         if (!base64Image || !name) return false;
         try {
@@ -428,8 +448,8 @@ export class Vision {
     async getSnapshotFromFrigate(eventId) {
         if (!eventId) return null;
         try {
-            // Frigates API för att hämta "best.jpg" av en specifik händelse
-            const res = await fetch(`http://127.0.0.1:5050/api/events/${eventId}/snapshot.jpg`);
+            console.log(`[VISION-DIAG] Försöker hämta händelse-snapshot för ${eventId}...`);
+            const res = await fetch(`http://localhost:5050/api/events/${eventId}/snapshot.jpg`);
             if (!res.ok) return null;
             const blob = await res.blob();
             return new Promise((resolve) => {
@@ -437,10 +457,22 @@ export class Vision {
                 reader.onloadend = () => resolve(reader.result);
                 reader.readAsDataURL(blob);
             });
-        } catch (e) {
-            console.error("Fel vid hämtning av Frigate snapshot:", e);
-            return null;
-        }
+        } catch (e) { return null; }
+    }
+
+    // --- NYTT: Hämta bild i exakt realtid (Strunta i gamla händelser) ---
+    async getLiveSnapshotFromFrigate(cameraName) {
+        try {
+            console.log(`[VISION-DIAG] Tar ett live-foto från ${cameraName} just nu...`);
+            const res = await fetch(`http://localhost:5050/api/${cameraName}/latest.jpg`);
+            if (!res.ok) return null;
+            const blob = await res.blob();
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
+        } catch (e) { return null; }
     }
 
     // --- NYTT: TRÄNA ANSIKTE ---
@@ -467,33 +499,17 @@ export class Vision {
         }
     }
 
-    async analyzeIntruder(base64Image, label) {
-        if (!base64Image) return { description: "", classification: "Okänd", threatLevel: 1 };
+    async analyzeIntruder(snap, label, camera = "") {
         try {
-            const rawBase64 = base64Image.replace(/^data:image\/jpeg;base64,/, "");
+            let context = "Beskriv vad du ser.";
+            if (camera === "Infarten") context = "Gatan är längst upp, uppfarten är i mitten. Ignorera den SILVER-färgade bilen som alltid står parkerad där.";
+            else if (camera === "Ytterdorren") context = "Du ser ytterdörren och trappen.";
+
+            const prompt = `Du är JARVIS. Titta på bilden och berätta på naturlig svenska vad du ser.
+            Håll det kort (max 20 ord) och undvik listor eller rubriker.
+            Kamera: ${camera}. Objekt i rörelse: ${label}. Kontext: ${context}`;
             
-            // Anpassad prompt baserat på objektstyp
-            let focusArea = label === "person" ? "Kläder, ansikte och föremål i händerna." : "Färg, typ (SUV/Sedan) och märke om möjligt.";
-            
-            const prompt = `Du är en kliniskt saklig säkerhetsexpert.
-            Detekterat objekt: ${label}.
-            
-            FAMILJENS BILAR: 
-            1. Andreas silvriga Volvo S70 (MJN072) - står oftast på grusplanen.
-            2. Helenas Volvo V70 (NUF786).
-            
-            INSTRUKTION: 
-            - Om du INTE ser ett fordon eller en person, svara ENDAST: "Ingen bil eller person i sikte".
-            - Om du är det minsta osäker på om ett objekt faktiskt är en person eller bil, svara att det är "Otydligt" istället för att gissa. Säg INTE att det är en person om du inte ser tydliga mänskliga drag.
-            - IGNORERA trädgårdsmöbler, stolar och bord. Fokusera 100% på fordon och personer.
-            - Om fordonet liknar någon av ovanstående bilar och står på sin vanliga plats, svara ENDAST: "Identifierad: [BILNAMN]".
-            - Om det är en annan/okänd bil, beskriv den noga som "OKÄND BIL".
-            - Svara kort på SVENSKA. Max 10 ord.
-            - Gissa aldrig färg om det är kolsvart, men nämn om fordonet är ljust eller mörkt.
-            
-            Fokus: ${focusArea}
-            
-            AVSLUTA MED EN TAG: [HOT: LÅG/MEDEL/HÖG] [TYP: VUXEN/BARN/FORDON]`;
+            const rawBase64 = snap.replace(/^data:image\/jpeg;base64,/, "");
             
             const res = await fetch('http://127.0.0.1:11434/api/chat', {
                 method: 'POST',
@@ -504,7 +520,7 @@ export class Vision {
                         { role: 'system', content: prompt },
                         { role: 'user', content: "Statusrapport för bilden.", images: [rawBase64] }
                     ],
-                    options: { num_predict: 50, temperature: 0.1 }, // Låg temp för mindre "kreativitet" (gissningar)
+                    options: { num_predict: 500, temperature: 0.1 }, // Höjd gräns för att slippa avklippta meningar.
                     stream: false
                 })
             });
@@ -563,4 +579,33 @@ export class Vision {
             return "";
         }
     }
+
+    // --- NYTT: FRIGATE SANNINGSLOGIK ---
+    async checkActiveDetections(cameraName) {
+        try {
+            const res = await fetch(`http://localhost:5050/api/events?active=1&camera=${cameraName}`);
+            if (!res.ok) {
+                console.warn(`[VISION-DIAG] Frigate returnerade felkod ${res.status} för ${cameraName}`);
+                return null;
+            }
+            const events = await res.json();
+            return (events && events.length > 0) ? events[0] : null;
+        } catch (e) {
+            console.error(`[VISION-DIAG] Kunde inte nå Frigate API på 5050 för ${cameraName}:`, e);
+            return null;
+        }
+    }
+
+    // --- NYTT: TOTAL SCAN (Alla kameror samtidigt) ---
+    async checkAllActiveDetections() {
+        try {
+            const res = await fetch(`http://localhost:5050/api/events?active=1`);
+            if (!res.ok) return [];
+            return await res.json();
+        } catch (e) {
+            console.error(`[VISION-DIAG] Kunde inte nå Frigate API för total-scan:`, e);
+            return [];
+        }
+    }
 }
+

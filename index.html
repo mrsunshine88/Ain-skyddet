@@ -232,25 +232,22 @@
                     <div id="idBadgeMaster" class="cam-id-badge">IDENTIFIERAD</div>
                 </div>
                 <div class="cam-slot">
-                    <img id="extCam1" src="http://localhost:9999/cam1">
+                    <img id="extCam1" src="http://localhost:5050/api/Ytterdorren" style="width:100%; height:100%; object-fit: cover;">
                     <div id="led-cam1" class="status-led"></div>
                     <div class="cam-label">Zone 1 / Ytterdörren</div>
                     <div id="idBadgeZone1" class="cam-id-badge">IDENTIFIERAD</div>
-                    <audio id="extAud1" src="http://localhost:9999/audio/cam1" muted autoplay></audio>
                 </div>
                 <div class="cam-slot">
-                    <img id="extCam2" src="http://localhost:9999/cam2">
+                    <img id="extCam2" src="http://localhost:5050/api/Infarten" style="width:100%; height:100%; object-fit: cover;">
                     <div id="led-cam2" class="status-led"></div>
                     <div class="cam-label">Zone 2 / Infarten</div>
                     <div id="idBadgeZone2" class="cam-id-badge">IDENTIFIERAD</div>
-                    <audio id="extAud2" src="http://localhost:9999/audio/cam2" muted autoplay></audio>
                 </div>
                 <div class="cam-slot">
-                    <img id="extCam3" src="http://localhost:9999/cam3">
+                    <img id="extCam3" src="http://localhost:5050/api/Garaget" style="width:100%; height:100%; object-fit: cover;">
                     <div id="led-cam3" class="status-led"></div>
                     <div class="cam-label">Zone 3 / Garaget</div>
                     <div id="idBadgeZone3" class="cam-id-badge">IDENTIFIERAD</div>
-                    <audio id="extAud3" src="http://localhost:9999/audio/cam3" muted autoplay></audio>
                 </div>
             </div>
 
@@ -330,6 +327,19 @@
                         <button class="btn-action" style="padding:12px; font-size:10px;" onclick="window.startCarReg()">REGISTRERA FORDON</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Identify Modal (För Namngivning från larm) -->
+    <div id="identifyOverlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:10001; align-items:center; justify-content:center;">
+        <div style="background:var(--panel); border:1px solid var(--accent); padding:30px; border-radius:15px; width:350px; text-align:center;">
+            <h2 style="color:var(--accent); margin-top:0; font-size:16px;">VEM ÄR DETTA?</h2>
+            <img id="identifySnap" src="" style="width:100%; border-radius:8px; margin-bottom:15px; border:1px solid var(--accent-dim);">
+            <input type="text" id="identifyNameInput" placeholder="Skriv namn (t.ex. Andreas)..." style="width:100%; padding:12px; margin-bottom:15px; background:#000; color:#fff; border:1px solid var(--accent-dim); border-radius:8px;">
+            <div style="display:flex; gap:10px;">
+                <button class="btn-outline" style="flex:1;" onclick="document.getElementById('identifyOverlay').style.display='none'">AVBRYT</button>
+                <button class="btn-action" style="flex:1;" onclick="window.confirmIdentification()">SPARA</button>
             </div>
         </div>
     </div>

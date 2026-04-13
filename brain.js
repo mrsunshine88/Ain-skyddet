@@ -261,7 +261,7 @@ export class Brain {
                     model, 
                     messages, 
                     stream: true,
-                    options: { num_ctx: 2048, num_predict: 200, temperature: 0.4 } // Ökad för tydligare rapporter
+                    options: { num_ctx: 2048, num_predict: 500, temperature: 0.4 } // Ökad kapacitet för att undvika avklippta meningar
                 }),
                 signal: controller.signal
             });

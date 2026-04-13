@@ -86,26 +86,59 @@ export function initLogic(ui, brain, vision, audio) {
             return;
         }
 
-        // --- VQA & SYNAUTOMATION ---
-        if ((lowerText.includes("ser du") || lowerText.includes("titta") || lowerText.includes("vad finns")) && 
-            (lowerText.includes("infart") || lowerText.includes("garage") || lowerText.includes("ytterdörr"))) {
-            
-            let targetCam = lowerText.includes("ytterdörr") ? ui.extCams[0] : (lowerText.includes("garage") ? ui.extCams[2] : ui.extCams[1]);
-            let camName = lowerText.includes("ytterdörr") ? "Ytterdörren" : (lowerText.includes("garage") ? "Garaget" : "Infarten");
+        // --- VQA & SYNAUTOMATION (Realtids-scann via Frigate) ---
+        const isQueryingOutside = /är (de|det) (nån|någon|något|några)/i.test(lowerText) || 
+                                  /nån (ute|utanför|där)/i.test(lowerText) ||
+                                  /är de lugnt/i.test(lowerText) ||
+                                  /ser du (nåt|något|nån|någon)/i.test(lowerText) ||
+                                  /(vad händer|titta|visa) (vid|på|ute|utanför)/i.test(lowerText) ||
+                                  /(bilen|trappen|vägen|infarten|garaget|grinden|staketet)/i.test(lowerText);
 
-            window.appendMessage('System', `👀 Tittar ut på ${camName}...`);
+        if (isQueryingOutside) {
+            window.appendMessage('System', `📡 Utför en aktiv genomsökning av alla zoner...`);
             try {
-                const snap = await vision.captureSnapshot(targetCam);
+                // 1. Fråga Frigate om ALLA aktiva detekteringar just nu
+                const activeEvents = await vision.checkAllActiveDetections();
+                
+                // --- NYTT: Smart Kameraval baserat på platsord ---
+                let targetCam = null;
+                if (lowerText.includes("bil") || lowerText.includes("infart") || lowerText.includes("väg")) targetCam = "Infarten";
+                else if (lowerText.includes("dörr") || lowerText.includes("trapp")) targetCam = "Ytterdorren";
+                else if (lowerText.includes("garaget")) targetCam = "Garaget";
+
+                // Om användaren nämner en plats, titta där först. Annars prioritera person-events.
+                let priorityEvent = null;
+                if (targetCam) {
+                    priorityEvent = activeEvents.find(e => e.camera === targetCam) || { camera: targetCam, label: 'platsen' };
+                } else {
+                    priorityEvent = activeEvents.find(e => e.label === 'person') || activeEvents[0];
+                }
+
+                if (!priorityEvent && (!activeEvents || activeEvents.length === 0)) {
+                    const reply = `Nej Andreas, Frigate bekräftar att det är helt tomt och lugnt där ute just nu.`;
+                    window.appendMessage('AI', reply);
+                    if (window.isHome) audio.speak(reply);
+                    window.isThinking = false;
+                    return;
+                }
+
+                const camName = priorityEvent.camera;
+                window.appendMessage('System', `🔍 Tittar närmare på ${camName}...`);
+
+                // 3. Hämta en blickfärsk LIVE-bild istället för en gammal händelse-bild
+                const snap = await vision.getLiveSnapshotFromFrigate(camName);
                 if (snap) {
-                    const sensed = await vision.detectObjects(targetCam);
                     const aiReply = await brain.getOllamaResponse(window.brainModel, [
-                        { role: 'system', content: `Svara kort på svenska om denna bild: ${text}. Jag ser ${sensed.length} objekt.` },
-                        { role: 'user', content: text }
+                        { role: 'system', content: `Du är JARVIS. Titta på denna bild från ${camName}. Berätta för Andreas vad du ser på ett helt naturligt sätt, som om du stod där själv. Undvik metadata, listor och tekniska termer.` },
+                        { role: 'user', content: text, images: [snap.split(',')[1]] }
                     ]);
-                    window.appendMessage('AI', `(Från ${camName}): ${aiReply}`);
+                    window.appendMessage('AI', aiReply);
                     if (window.isHome) audio.speak(aiReply);
                 }
-            } catch (e) { console.error("VQA error:", e); }
+            } catch (e) { 
+                console.error("Verifieringsfel:", e); 
+                window.appendMessage('AI', "Jag kunde inte nå Frigate för att verifiera läget just nu.");
+            }
             window.isThinking = false;
             return;
         }

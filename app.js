@@ -4,7 +4,7 @@ import { AudioHandler } from './audio.js';
 import { initSecurity } from './app_security.js';
 import { initLogic } from './app_logic.js';
 
-const { ipcRenderer } = require('electron');
+const { ipcRenderer } = window.require('electron');
 
 // --- GLOBALA VARS ---
 let brain, vision, audio;
@@ -159,13 +159,23 @@ async function init() {
 
 window.checkOllama = async () => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 sekunders timeout för hälsa
+    const timeoutId = setTimeout(() => controller.abort(), 5000); 
 
     try {
         const res = await fetch('http://127.0.0.1:11434/api/tags', { signal: controller.signal });
         clearTimeout(timeoutId);
-        if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
         
+        if (!res.ok) {
+            const errorText = await res.text();
+            console.warn(`[OLLAMA-CHECK] Servern svarade med felkod ${res.status}: ${errorText.substring(0, 50)}...`);
+            throw new Error(`HTTP ${res.status}`);
+        }
+        
+        const contentType = res.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+            throw new Error("Svaret är inte JSON");
+        }
+
         const data = await res.json();
         const found = data.models.find(m => m.name.includes('llama3.2-vision')) || data.models[0];
         window.brainModel = found.name;
@@ -177,18 +187,20 @@ window.checkOllama = async () => {
         }
     } catch (e) { 
         clearTimeout(timeoutId);
-        // Om AI:n är upptagen (Thinking) så är det inte en störning, bara belastning.
+        console.warn("[OLLAMA-CHECK] Kunde inte verifiera AI-status:", e.message);
+        
         if (ui.pillText) {
             if (window.isThinking) {
                 ui.pillText.innerText = "JARVIS (ARBETAR...)";
                 ui.pillText.style.borderColor = "#eab308";
             } else {
-                ui.pillText.innerText = "JARVIS (ANSLUTER...)";
+                ui.pillText.innerText = "JARVIS (AUTO-LÄGE)";
                 ui.pillText.style.borderColor = "#f43f5e";
             }
         }
     }
-};
+}
+;
 
 window.internalThoughtLoop = async () => {
     if (window.isThinking || !window.isHome) return;
@@ -290,42 +302,137 @@ ipcRenderer.on('frigate-event', async (event, data) => {
     const after = data.after;
     if (!after || !after.id) return;
 
-    // Endast larm för person, bil och djur
-    const targets = ["person", "car", "motorcycle", "dog", "cat"];
-    if (!targets.includes(after.label)) return;
+    const visionTargets = ["person", "car", "motorcycle", "dog", "cat"];
+    const audioTargets = ["scream", "bark", "glass_break", "speech"];
+    if (!visionTargets.includes(after.label) && !audioTargets.includes(after.label)) return;
 
-    // Förhindra dubbla larm för samma objekt inom 30 sekunder
     const alertKey = `mqtt_${after.id}`;
     if (window.lastAlerts[alertKey]) return;
     window.lastAlerts[alertKey] = true;
     setTimeout(() => { delete window.lastAlerts[alertKey]; }, 30000);
 
-    console.log(`[FRIGATE-MQTT] Händelse mottagen: ${after.label} vid ${after.camera}`);
-    
-    // 1. Hämta bild från Frigate
+    console.log(`[FRIGATE-MQTT] Händelse: ${after.label} vid ${after.camera}`);
+
+    // --- STEG 1: PANG-LARM (Omedelbar reflex med Zon-intelligens & Minne) ---
     const snap = await vision.getSnapshotFromFrigate(after.id);
-    if (!snap) return;
+    const knownName = after.label === 'person' ? await vision.recognizeFaceFromBase64(snap) : null;
     
-    window.lastIntruderSnap = snap;
-
-    // 2. Kör AI-analys (Vision)
-    const analysis = await vision.analyzeIntruder(snap, after.label);
+    const soundMap = { "glass_break": "glaskross", "scream": "skrik", "bark": "hundskall", "speech": "tal", "person": "en person", "car": "ett fordon", "motorcycle": "en motorcykel", "dog": "ett djur", "cat": "ett djur" };
+    let labelSwe = knownName || soundMap[after.label] || "aktivitet";
     
-    // 3. Skapa meddelande
-    let cleanDesc = analysis.description.replace(/\[.*?\]/g, '').replace(/\*\*/g, '').trim();
-    const incidentMsg = `Varning! En ${after.label === 'person' ? 'person' : 'detalj'} syns vid ${after.camera}. ${cleanDesc}`;
+    // Zon-analys
+    const zones = after.entered_zones || [];
+    let zoneContext = "";
+    if (after.camera === "Infarten") {
+        if (zones.includes('uppfart')) zoneContext = "in på uppfarten";
+        else if (zones.includes('vagen')) zoneContext = "förbi på gatan";
+    }
 
-    // 4. CHATT + TAL (Enligt användarens önskemål)
-    window.appendMessage('AI', `🚨 [FRIGATE AKTIVITET]: ${incidentMsg}`);
-    audio.speak(incidentMsg);
+    // Omedelbart röstmeddelande
+    const place = zoneContext || `vid ${after.camera}`;
+    const instantMsg = knownName ? `${knownName} är ${place}!` : `Larm! ${labelSwe} ${place}!`;
+    
+    // Gör larmet mindre "skrikigt" om det bara är på gatan
+    const isQuietAlert = zones.includes('vagen') && !zones.includes('uppfart');
+    const alertPrefix = isQuietAlert ? "ℹ️ [INFO]" : "⚡ [PANG-LARM]";
 
-    // Spara i incidentloggen
-    if (!window.incidents) window.incidents = [];
-    window.incidents.push({ 
-        time: new Date().toLocaleTimeString(), 
-        detail: incidentMsg,
-        snap: snap
-    });
+    window.appendMessage('System', `${alertPrefix}: ${instantMsg}`);
+    audio.speak(instantMsg);
+
+    // --- STEG 2: ASYNKRON ANALYS (Hjärnan jobbar i bakgrunden) ---
+    (async () => {
+        // Ljudhantering (STT)
+        if (audioTargets.includes(after.label)) {
+            if (after.label === "speech") {
+                const camIdx = after.camera === "Ytterdorren" ? 0 : (after.camera === "Garaget" ? 2 : 1);
+                const audioElem = ui.extAuds[camIdx];
+                if (audioElem) {
+                    const text = await audio.transcribeFromElement(audioElem, 7000);
+                    if (text && text.length > 2) {
+                        const report = `📢 [TJUVLYSSNING]: "${text}"`;
+                        window.appendMessage('AI', report);
+                        audio.speak(`De sa: ${text}`);
+                    }
+                }
+            }
+        }
+
+        // Visuell analys (Kläder, färger, etc.)
+        if (visionTargets.includes(after.label)) {
+            const snap = await vision.getSnapshotFromFrigate(after.id);
+            if (!snap) return;
+            window.lastIntruderSnap = snap;
+
+            // --- NYTT: Skicka med namnet om vi vet vem det är ---
+            const targetLabel = knownName || after.label;
+            const analysis = await vision.analyzeIntruder(snap, targetLabel, after.camera);
+            
+            // --- KRAFTFULL SANITERING (Tar bort eko och robot-taggar) ---
+            let cleanDesc = analysis.description;
+            if (cleanDesc.includes("Resultat:")) cleanDesc = cleanDesc.split("Resultat:").pop();
+            
+            // Rensa bort stjärnor, instruktioner och skräp
+            cleanDesc = cleanDesc.replace(/\*/g, '')
+                                .replace(/Uppgift:.*?word\./gi, '')
+                                .replace(/Bilden är uppladdad.*?\./gi, '') // Specifik loop-fix
+                                .trim();
+            
+            // --- LOOP-SKYDD: Ta bort upprepade meningar ---
+            const sentences = cleanDesc.split('.');
+            cleanDesc = [...new Set(sentences)].join('.').trim();
+
+            // Kolla om vi fick ett giltigt svar
+            if (cleanDesc && cleanDesc.length > 5) {
+                const msgDiv = window.appendMessage('AI', `🚨 [BEVAKNING]: ${cleanDesc}`);
+                
+                // --- NYTT: Lägg till IDENTIFIERA-knapp ---
+                const btn = document.createElement('button');
+                btn.className = 'btn-outline';
+                btn.style.marginTop = '8px';
+                btn.style.fontSize = '9px';
+                btn.innerText = '🏷️ NAMNGE OBJEKT';
+                btn.onclick = () => window.openIdentifyModal(snap, after.label);
+                msgDiv.appendChild(btn);
+
+                audio.speak(cleanDesc);
+                
+                if (!window.incidents) window.incidents = [];
+                window.incidents.push({ time: new Date().toLocaleTimeString(), detail: cleanDesc, snap: snap });
+            }
+        }
+    })();
 });
 
+
+
 window.onload = init;
+window.pendingIdentifySnap = null;
+window.pendingIdentifyLabel = null;
+
+window.openIdentifyModal = (snap, label) => {
+    window.pendingIdentifySnap = snap;
+    window.pendingIdentifyLabel = label;
+    document.getElementById('identifySnap').src = snap;
+    document.getElementById('identifyOverlay').style.display = 'flex';
+    document.getElementById('identifyNameInput').value = '';
+    document.getElementById('identifyNameInput').focus();
+};
+
+window.confirmIdentification = async () => {
+    const name = document.getElementById('identifyNameInput').value.trim();
+    if (!name || !window.pendingIdentifySnap) return;
+
+    window.appendMessage('System', `⌛ Tränar JARVIS: Lägger till "${name}" i minnet...`);
+    document.getElementById('identifyOverlay').style.display = 'none';
+
+    try {
+        const success = await vision.registerFaceFromBase64(name, window.pendingIdentifySnap);
+        if (success) {
+            window.appendMessage('AI', `✅ Klart! Jag kommer nu ihåg att detta är ${name}. Tack för hjälpen, Andreas.`);
+        } else {
+            window.appendMessage('System', `⚠️ Kunde inte spara i minnet. Kontrollera att bilden visar ett tydligt ansikte.`);
+        }
+    } catch (e) {
+        console.error("Identifiering misslyckades:", e);
+    }
+};

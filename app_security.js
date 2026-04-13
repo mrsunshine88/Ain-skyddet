@@ -71,7 +71,9 @@ export function initSecurity(ui, vision, audio, brain) {
                 const isNight = hour >= 21 || hour < 6;
                 const dynamicThreshold = isNight ? 0.45 : 0.75;
 
-                let found = objects.filter(o => targets.includes(o.label) && o.confidence > dynamicThreshold);
+                // AI-analys avaktiverad: Vi väntar på info från Frigate istället.
+                let found = []; 
+                // let found = objects.filter(o => targets.includes(o.label) && o.confidence > dynamicThreshold);
 
                 if (found.length > 0) {
                     const currentObj = found[0];
