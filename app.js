@@ -5,6 +5,7 @@ import { initSecurity } from './app_security.js';
 import { initLogic } from './app_logic.js';
 
 const { ipcRenderer } = window.require('electron');
+window.ipcRenderer = ipcRenderer;
 
 // --- GLOBALA VARS ---
 let brain, vision, audio;
@@ -302,25 +303,44 @@ ipcRenderer.on('frigate-event', async (event, data) => {
     const after = data.after;
     if (!after || !after.id) return;
 
+    // --- SMARTA DÖRRVAKTEN (Deduplicering per kamera) ---
+    if (!window.lastAlerts) window.lastAlerts = {};
+    const alertKey = `${after.camera}_${after.id}_${after.label}`;
+    if (window.lastAlerts[alertKey]) return; // Redan rapporterat på denna kamera
+    
+    // Sätt låset och rensa efter 60 sekunder
+    window.lastAlerts[alertKey] = true;
+    setTimeout(() => { delete window.lastAlerts[alertKey]; }, 60000);
+
+    // --- RÖRELSE-SPÅRNING (Trajectory Logic) ---
+    if (!window.lastSequence) window.lastSequence = { camera: '', time: 0 };
+    const now = Date.now();
+    let movementInfo = "";
+    
+    // Om samma person/objekt rör sig inom 45 sekunder
+    if (now - window.lastSequence.time < 45000) {
+        movementInfo = ` (Rör sig vidare från ${window.lastSequence.camera})`;
+    }
+    window.lastSequence = { camera: after.camera, time: now };
+
+    console.log(`[FRIGATE] Ny händelse: ${after.label} vid ${after.camera}`);
+
     const visionTargets = ["person", "car", "motorcycle", "dog", "cat"];
     const audioTargets = ["scream", "bark", "glass_break", "speech"];
     if (!visionTargets.includes(after.label) && !audioTargets.includes(after.label)) return;
 
-    const alertKey = `mqtt_${after.id}`;
-    if (window.lastAlerts[alertKey]) return;
-    window.lastAlerts[alertKey] = true;
-    setTimeout(() => { delete window.lastAlerts[alertKey]; }, 30000);
-
-    console.log(`[FRIGATE-MQTT] Händelse: ${after.label} vid ${after.camera}`);
-
     // --- STEG 1: PANG-LARM (Omedelbar reflex med Zon-intelligens & Minne) ---
     const snap = await vision.getSnapshotFromFrigate(after.id);
-    const knownName = after.label === 'person' ? await vision.recognizeFaceFromBase64(snap) : null;
+    let knownName = null;
+    if (after.label === 'person') {
+        // Hämta en inzoomad bild (Smart Crop) för bättre ansiktsigenkänning
+        const faceSnap = await vision.getSnapshotFromFrigate(after.id, true);
+        knownName = await vision.recognizeFaceFromBase64(faceSnap || snap);
+    }
     
     const soundMap = { "glass_break": "glaskross", "scream": "skrik", "bark": "hundskall", "speech": "tal", "person": "en person", "car": "ett fordon", "motorcycle": "en motorcykel", "dog": "ett djur", "cat": "ett djur" };
     let labelSwe = knownName || soundMap[after.label] || "aktivitet";
     
-    // Zon-analys
     const zones = after.entered_zones || [];
     let zoneContext = "";
     if (after.camera === "Infarten") {
@@ -332,12 +352,25 @@ ipcRenderer.on('frigate-event', async (event, data) => {
     const place = zoneContext || `vid ${after.camera}`;
     const instantMsg = knownName ? `${knownName} är ${place}!` : `Larm! ${labelSwe} ${place}!`;
     
+    // --- LUKAS-SPECIFIK DÖRRVAKT ---
+    if (window.lukasActive && after.camera === 'Ytterdorren' && after.label === 'person') {
+        if (knownName) audio.speak(`Lukas, det är bara ${knownName} vid dörren. Du kan öppna om du vill.`);
+        else audio.speak("Lukas, det står någon okänd vid dörren. Öppna inte, jag håller koll på dem.");
+    }
+    
     // Gör larmet mindre "skrikigt" om det bara är på gatan
     const isQuietAlert = zones.includes('vagen') && !zones.includes('uppfart');
     const alertPrefix = isQuietAlert ? "ℹ️ [INFO]" : "⚡ [PANG-LARM]";
 
     window.appendMessage('System', `${alertPrefix}: ${instantMsg}`);
-    audio.speak(instantMsg);
+    
+    // Röst-gating (Ska JARVIS prata nu?)
+    if (window.canSpeakNow()) {
+        audio.speak(instantMsg);
+    } else {
+        // Buffra händelsen för BRIEFER när vi kommer hem
+        window.eventBuffer.push(`${labelSwe} detekterades ${place} klockan ${new Date().toLocaleTimeString()}`);
+    }
 
     // --- STEG 2: ASYNKRON ANALYS (Hjärnan jobbar i bakgrunden) ---
     (async () => {
@@ -363,9 +396,9 @@ ipcRenderer.on('frigate-event', async (event, data) => {
             if (!snap) return;
             window.lastIntruderSnap = snap;
 
-            // --- NYTT: Skicka med namnet om vi vet vem det är ---
-            const targetLabel = knownName || after.label;
-            const analysis = await vision.analyzeIntruder(snap, targetLabel, after.camera);
+            // --- IDENTITETS-BRYGGA: Förstärkt ärlighet ---
+            const targetLabel = (knownName && knownName !== "unknown") ? knownName : "en okänd person";
+            const analysis = await vision.analyzeIntruder(snap, targetLabel, after.camera, movementInfo);
             
             // --- KRAFTFULL SANITERING (Tar bort eko och robot-taggar) ---
             let cleanDesc = analysis.description;
@@ -374,7 +407,8 @@ ipcRenderer.on('frigate-event', async (event, data) => {
             // Rensa bort stjärnor, instruktioner och skräp
             cleanDesc = cleanDesc.replace(/\*/g, '')
                                 .replace(/Uppgift:.*?word\./gi, '')
-                                .replace(/Bilden är uppladdad.*?\./gi, '') // Specifik loop-fix
+                                .replace(/Bilden är uppladdad.*?\./gi, '') 
+                                .replace(/Statusrapport.*?\./gi, '')
                                 .trim();
             
             // --- LOOP-SKYDD: Ta bort upprepade meningar ---
@@ -384,6 +418,8 @@ ipcRenderer.on('frigate-event', async (event, data) => {
             // Kolla om vi fick ett giltigt svar
             if (cleanDesc && cleanDesc.length > 5) {
                 const msgDiv = window.appendMessage('AI', `🚨 [BEVAKNING]: ${cleanDesc}`);
+                if (window.canSpeakNow()) audio.speak(cleanDesc);
+
                 
                 // --- NYTT: Lägg till IDENTIFIERA-knapp ---
                 const btn = document.createElement('button');
@@ -393,17 +429,95 @@ ipcRenderer.on('frigate-event', async (event, data) => {
                 btn.innerText = '🏷️ NAMNGE OBJEKT';
                 btn.onclick = () => window.openIdentifyModal(snap, after.label);
                 msgDiv.appendChild(btn);
-
-                audio.speak(cleanDesc);
                 
                 if (!window.incidents) window.incidents = [];
+
                 window.incidents.push({ time: new Date().toLocaleTimeString(), detail: cleanDesc, snap: snap });
             }
         }
     })();
 });
+// --- SYSTEM-LÄGEN & RIDDAR-PROTOKOLL ---
+window.systemMode = 'hemma'; // 'hemma', 'borta', 'sova'
+window.lukasActive = false;
+window.eventBuffer = []; // Sparar händelser i Borta/Sova-läge
 
+window.setSystemMode = (mode) => {
+    window.systemMode = mode;
+    console.log(`[SYSTEM] Läge ändrat till: ${mode.toUpperCase()}`);
+    
+    // --- SMARTA KNAPPAR: Aktivera Neon-glöd ---
+    const modes = ['Home', 'Away', 'Sleep'];
+    modes.forEach(m => {
+        const btn = document.getElementById('btn' + m);
+        if (btn) {
+            if (m.toLowerCase() === mode.toLowerCase()) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        }
+    });
 
+    if (mode === 'hemma') {
+        window.playBriefing();
+    } else {
+        window.appendMessage('System', `🔒 Systemet är i ${mode.toUpperCase()}-läge. Tysta larm aktiverade.`);
+    }
+};
+
+window.toggleLukasGuard = () => {
+    window.lukasActive = !window.lukasActive;
+    const btn = document.getElementById('btnLukas');
+    if (btn) {
+        btn.classList.toggle('active', window.lukasActive);
+    }
+    
+    if (window.lukasActive) {
+        window.appendMessage('AI', "🛡️ Riddar-protokollet aktiverat. Lukas säkerhet är nu min högsta prioritet.");
+        audio.speak("Riddar protokollet aktiverat. Lukas, jag vakar över dig nu.");
+    }
+};
+
+window.playBriefing = async () => {
+    if (window.eventBuffer.length === 0) {
+        audio.speak("Välkommen hem Andreas. Allt har varit lugnt medan du var borta.");
+        return;
+    }
+
+    const rawLog = window.eventBuffer.join("\n");
+    const prompt = `Du är JARVIS. Jag har precis kommit hem. Här är loggen på vad som hänt:
+    ${rawLog}
+    
+    Sammanfatta detta kort och personligt för mig (Andreas) på svenska. Berätta bara det viktigaste. Max 40 ord.`;
+    
+    window.appendMessage('System', "⌛ JARVIS sammanställer händelserapporten...");
+    
+    try {
+        const res = await fetch('http://127.0.0.1:11434/api/generate', {
+            method: 'POST',
+            body: JSON.stringify({ model: 'llama3.2-vision', prompt, stream: false, options: { num_predict: 100, temperature: 0.3 } })
+        });
+        const data = await res.json();
+        const summary = data.response.trim();
+        
+        window.appendMessage('AI', `📋 BRIEFING: ${summary}`);
+        audio.speak(summary);
+    } catch (e) {
+        const fallBack = `Välkommen hem. Jag har registrerat ${window.eventBuffer.length} händelser. Allt verkar under kontroll.`;
+        audio.speak(fallBack);
+    }
+    
+    window.eventBuffer = []; // Töm bufferten
+};
+
+// Hjälpfunktion för att kolla om JARVIS får prata
+window.canSpeakNow = () => {
+    if (window.lukasActive) return true; // Lukas prioriteras alltid
+    if (window.vaktMode) return true; // NYTT: Prata alltid om Vaktläge är på
+    if (window.systemMode === 'hemma') return true;
+    return false; // Borta eller Sova är tyst
+};
 
 window.onload = init;
 window.pendingIdentifySnap = null;
@@ -422,17 +536,28 @@ window.confirmIdentification = async () => {
     const name = document.getElementById('identifyNameInput').value.trim();
     if (!name || !window.pendingIdentifySnap) return;
 
-    window.appendMessage('System', `⌛ Tränar JARVIS: Lägger till "${name}" i minnet...`);
+    window.appendMessage('System', `⌛ Tränar JARVIS: Lägger till "${name}" i det lokala arkivet...`);
     document.getElementById('identifyOverlay').style.display = 'none';
 
     try {
-        const success = await vision.registerFaceFromBase64(name, window.pendingIdentifySnap);
-        if (success) {
-            window.appendMessage('AI', `✅ Klart! Jag kommer nu ihåg att detta är ${name}. Tack för hjälpen, Andreas.`);
+        // --- NYTT: DUBBEL-LAGRING ---
+        // 1. Spara i Ansiktsmotorn (för igenkänning)
+        const successAI = await vision.registerFaceFromBase64(name, window.pendingIdentifySnap);
+        
+        // 2. Spara i den lokala PROFILES-mappen (för fysiskt bevis på disk)
+        await ipcRenderer.invoke('save-face-image', { 
+            base64: window.pendingIdentifySnap, 
+            name: name, 
+            index: Date.now() 
+        });
+
+        if (successAI) {
+            window.appendMessage('AI', `✅ Klart! Jag har sparat bilden på ${name} både i minnet och i mappen 'profiles'.`);
         } else {
-            window.appendMessage('System', `⚠️ Kunde inte spara i minnet. Kontrollera att bilden visar ett tydligt ansikte.`);
+            window.appendMessage('System', `⚠️ AI-träning misslyckades, men bilden har sparats i profiles-mappen.`);
         }
     } catch (e) {
         console.error("Identifiering misslyckades:", e);
     }
 };
+

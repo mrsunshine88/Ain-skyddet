@@ -124,7 +124,6 @@ export class AudioHandler {
     }
 
     speak(text, options = {}) {
-        window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);
         u.lang = 'sv-SE'; 
         u.pitch = options.pitch || 0.9; 

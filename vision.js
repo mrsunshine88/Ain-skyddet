@@ -195,11 +195,17 @@ export class Vision {
                         signal: controller.signal
                     });
                     
-                    clearTimeout(timeoutId);
-                    clearTimeout(globalTimeout);
-                    
                     if (res.ok) {
                         this.activeUser = name;
+                        
+                        // --- NYTT: Fysisk lagring på disk vid träning ---
+                        const base64 = off.toDataURL('image/jpeg', 0.95);
+                        window.ipcRenderer.invoke('save-face-image', { 
+                            base64: base64, 
+                            name: name, 
+                            index: Date.now() 
+                        }).catch(e => console.error("Kunde inte spara fysisk träningsbild:", e));
+
                         resolve({ success: true });
                     } else {
                         resolve({ success: false, error: `SERVER_ERR_${res.status}` });
@@ -238,7 +244,7 @@ export class Vision {
             const res = await fetch('http://127.0.0.1:32168/v1/vision/face/recognize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: rawBase64, min_confidence: 0.5 })
+                body: JSON.stringify({ image: rawBase64, min_confidence: 0.35 })
             });
             const data = await res.json();
             if (data.success && data.predictions && data.predictions.length > 0) {
@@ -266,8 +272,9 @@ export class Vision {
             const fd = new FormData();
             fd.append('image', blob, 'training.jpg');
             fd.append('userid', name);
+            fd.append('min_confidence', '0.35'); // NYTT: Tillåt registrering från svårare vinklar
             
-            const res = await fetch('http://localhost:32168/v1/vision/face/register', { 
+            const res = await fetch('http://127.0.0.1:32168/v1/vision/face/register', { 
                 method: 'POST', 
                 body: fd 
             });
@@ -445,11 +452,12 @@ export class Vision {
     }
 
     // --- NYTT: SMART GUARD VISION ---
-    async getSnapshotFromFrigate(eventId) {
+    async getSnapshotFromFrigate(eventId, crop = false) {
         if (!eventId) return null;
         try {
-            console.log(`[VISION-DIAG] Försöker hämta händelse-snapshot för ${eventId}...`);
-            const res = await fetch(`http://localhost:5050/api/events/${eventId}/snapshot.jpg`);
+            console.log(`[VISION-DIAG] Försöker hämta händelse-snapshot för ${eventId} (Crop: ${crop})...`);
+            const url = `http://localhost:5050/api/events/${eventId}/snapshot.jpg${crop ? '?crop=1' : ''}`;
+            const res = await fetch(url);
             if (!res.ok) return null;
             const blob = await res.blob();
             return new Promise((resolve) => {
@@ -499,15 +507,21 @@ export class Vision {
         }
     }
 
-    async analyzeIntruder(snap, label, camera = "") {
+    async analyzeIntruder(snap, label, camera = "", movementContext = "") {
         try {
-            let context = "Beskriv vad du ser.";
-            if (camera === "Infarten") context = "Gatan är längst upp, uppfarten är i mitten. Ignorera den SILVER-färgade bilen som alltid står parkerad där.";
+            let context = "Beskriv vad personen gör." + movementContext;
+            if (camera === "Infarten") context = "Du ser uppfarten och vägen. Ignorera den SILVER-färgade bilen.";
             else if (camera === "Ytterdorren") context = "Du ser ytterdörren och trappen.";
 
-            const prompt = `Du är JARVIS. Titta på bilden och berätta på naturlig svenska vad du ser.
-            Håll det kort (max 20 ord) och undvik listor eller rubriker.
-            Kamera: ${camera}. Objekt i rörelse: ${label}. Kontext: ${context}`;
+            // --- DIN PERFEKTA MANUAL (Klinisk & Ärlig) ---
+            const timeStr = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+            let sysHeader = `# DIN ROLL: Övervakningsexpert i ett HUS. Ge en UTFÖRLIG och klinisk rapport på 3-4 meningar på SVENSKA. Klockan: ${timeStr}.\n`;
+            sysHeader += "# TRÄDGÅRDS-LAYOUT: Ytterdörren (huset) <-> Garaget (mitten) <-> Infarten (vägen). Dessa tre zoner hänger ihop i serieföljd.\n";
+            sysHeader += "# KONTEXT: Du befinner dig i ett HUS. Använd alltid namnet som anges i loggen för att identifiera personer.\n";
+            sysHeader += "# RAPPORTERING: Beskriv rörelse mellan zonerna (t.ex. 'rör sig vidare mot...', 'passerar...'). Var detaljerad men 100% ärlig.\n";
+            
+            const prompt = `${sysHeader}
+            Kamera: ${camera}. Objekt: ${label}. Kontext: ${context}`;
             
             const rawBase64 = snap.replace(/^data:image\/jpeg;base64,/, "");
             
@@ -518,9 +532,13 @@ export class Vision {
                     model: this.visionModel,
                     messages: [
                         { role: 'system', content: prompt },
-                        { role: 'user', content: "Statusrapport för bilden.", images: [rawBase64] }
+                        { role: 'user', content: "Ge en detaljerad och objektiv rapport om personen på bilden." }
                     ],
-                    options: { num_predict: 500, temperature: 0.1 }, // Höjd gräns för att slippa avklippta meningar.
+                    options: { 
+                        num_predict: 250, 
+                        temperature: 0.0, 
+                        stop: ["\n", "Bild:", "Status:"] 
+                    },
                     stream: false
                 })
             });

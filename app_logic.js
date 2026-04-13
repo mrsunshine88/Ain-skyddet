@@ -97,44 +97,47 @@ export function initLogic(ui, brain, vision, audio) {
         if (isQueryingOutside) {
             window.appendMessage('System', `📡 Utför en aktiv genomsökning av alla zoner...`);
             try {
-                // 1. Fråga Frigate om ALLA aktiva detekteringar just nu
-                const activeEvents = await vision.checkAllActiveDetections();
+                // --- NYTT: Supersmart AI-Kameraväxel ---
+                let targetCams = [];
+                // 1. Snabb-fallback (Keywords för hastighet)
+                if (lowerText.includes("bil") || lowerText.includes("infart") || lowerText.includes("väg")) targetCams = ["Infarten"];
+                else if (lowerText.includes("dörr") || lowerText.includes("trapp")) targetCams = ["Ytterdorren"];
+                else if (lowerText.includes("garaget")) targetCams = ["Garaget"];
+                else if (lowerText.includes("ute") || lowerText.includes("lugnt") || lowerText.includes("tomten")) targetCams = ["Ytterdorren", "Infarten", "Garaget"];
+
+                // 2. AI-Intention (Om nyckelord saknas eller för mer komplex förståelse)
+                if (targetCams.length === 0) {
+                    const intentPrompt = `Givet frågan: "${text}". Vilka kameror är relevanta? (Ytterdorren, Infarten, Garaget). Svara ENDAST med namnen separerade med komma.`;
+                    const intentRes = await fetch('http://127.0.0.1:11434/api/generate', {
+                        method: 'POST',
+                        body: JSON.stringify({ model: 'llama3.2-vision', prompt: intentPrompt, stream: false, options: { num_predict: 20, temperature: 0.1 } })
+                    });
+                    const intentData = await intentRes.json();
+                    targetCams = intentData.response.split(',').map(n => n.trim()).filter(n => ["Ytterdorren", "Infarten", "Garaget"].includes(n));
+                }
+
+                if (targetCams.length === 0) targetCams = ["Ytterdorren"]; // Default ytterdörr
+
+                window.appendMessage('System', `🔍 Scannar ${targetCams.join(" och ")}...`);
+
+                let multiContext = [];
+                for (const camName of targetCams) {
+                    const snap = await vision.getLiveSnapshotFromFrigate(camName);
+                    if (snap) {
+                        const aiReply = await brain.getOllamaResponse(window.brainModel, [
+                            { role: 'system', content: `Du är JARVIS. Titta på denna bild från ${camName}. Beskriv kortfattat vad du ser för Andreas på svenska.` },
+                            { role: 'user', content: text, images: [snap.split(',')[1]] }
+                        ]);
+                        multiContext.push(`${camName}: ${aiReply}`);
+                    }
+                }
+
+                // 3. Generera det slutgiltiga sammanslagna svaret
+                const finalPrompt = `Användaren (Andreas) frågar: "${text}". Här är vad jag ser på mina olika kameror:\n${multiContext.join("\n")}\n\nSvara nu Andreas på ett naturligt sätt baserat på all denna info.`;
+                const finalReply = await brain.getOllamaResponse(window.brainModel, [{ role: 'user', content: finalPrompt }]);
                 
-                // --- NYTT: Smart Kameraval baserat på platsord ---
-                let targetCam = null;
-                if (lowerText.includes("bil") || lowerText.includes("infart") || lowerText.includes("väg")) targetCam = "Infarten";
-                else if (lowerText.includes("dörr") || lowerText.includes("trapp")) targetCam = "Ytterdorren";
-                else if (lowerText.includes("garaget")) targetCam = "Garaget";
-
-                // Om användaren nämner en plats, titta där först. Annars prioritera person-events.
-                let priorityEvent = null;
-                if (targetCam) {
-                    priorityEvent = activeEvents.find(e => e.camera === targetCam) || { camera: targetCam, label: 'platsen' };
-                } else {
-                    priorityEvent = activeEvents.find(e => e.label === 'person') || activeEvents[0];
-                }
-
-                if (!priorityEvent && (!activeEvents || activeEvents.length === 0)) {
-                    const reply = `Nej Andreas, Frigate bekräftar att det är helt tomt och lugnt där ute just nu.`;
-                    window.appendMessage('AI', reply);
-                    if (window.isHome) audio.speak(reply);
-                    window.isThinking = false;
-                    return;
-                }
-
-                const camName = priorityEvent.camera;
-                window.appendMessage('System', `🔍 Tittar närmare på ${camName}...`);
-
-                // 3. Hämta en blickfärsk LIVE-bild istället för en gammal händelse-bild
-                const snap = await vision.getLiveSnapshotFromFrigate(camName);
-                if (snap) {
-                    const aiReply = await brain.getOllamaResponse(window.brainModel, [
-                        { role: 'system', content: `Du är JARVIS. Titta på denna bild från ${camName}. Berätta för Andreas vad du ser på ett helt naturligt sätt, som om du stod där själv. Undvik metadata, listor och tekniska termer.` },
-                        { role: 'user', content: text, images: [snap.split(',')[1]] }
-                    ]);
-                    window.appendMessage('AI', aiReply);
-                    if (window.isHome) audio.speak(aiReply);
-                }
+                window.appendMessage('AI', finalReply);
+                if (window.canSpeakNow()) audio.speak(finalReply);
             } catch (e) { 
                 console.error("Verifieringsfel:", e); 
                 window.appendMessage('AI', "Jag kunde inte nå Frigate för att verifiera läget just nu.");
@@ -151,9 +154,10 @@ export function initLogic(ui, brain, vision, audio) {
             const timeStr = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
             const sitting = Math.floor(brain.brainData.users["Andreas"]?.sittingMinsToday || 0);
             
-            let sysHeader = `# DIN ROLL: Övervakningsexpert. Svara med MAX 2 meningar på SVENSKA. Inget småprat. Klockan: ${timeStr}.\n`;
-            if (window.isLukasMode) sysHeader += "# LUKAS-LÄGE: Var beskyddande och saklig.\n";
-            if (window.isSleeping) sysHeader += "# SOV-LÄGE: Andreas sover, var viskande och kortfattad.\n";
+            let sysHeader = `# DIN ROLL: Övervakningsexpert i ett HUS. Ge en UTFÖRLIG och klinisk rapport på 3-4 meningar på SVENSKA. Klockan: ${timeStr}.\n`;
+            sysHeader += "# TRÄDGÅRDS-LAYOUT: Ytterdörren (huset) <-> Garaget (mitten) <-> Infarten (vägen). Dessa tre zoner hänger ihop i serieföljd.\n";
+            sysHeader += "# KONTEXT: Du befinner dig i ett HUS. Använd alltid namnet som anges i loggen för att identifiera personer.\n";
+            sysHeader += "# RAPPORTERING: Beskriv rörelse mellan zonerna (t.ex. 'rör sig vidare mot...', 'passerar...'). Var detaljerad men 100% ärlig.\n";
 
             const incidents = (window.incidents || []).slice(-3).map(i => i.detail).join(". ");
             const memories = JSON.stringify(brain.brainData.users["Andreas"]?.facts || []);
@@ -194,15 +198,20 @@ export function initLogic(ui, brain, vision, audio) {
     };
 
     window.setGuardMode = (mode) => {
-        // Återställ alla huvudlägen visuellt
+        // --- SMARTA KNAPPAR (Neon-glöd) ---
         const modes = ['Home', 'Away', 'Sleep'];
-        modes.forEach(m => document.getElementById('btn' + m)?.classList.remove('active'));
-        
-        // Aktivera det valda läget visuellt
-        const activeBtn = document.getElementById('btn' + mode.charAt(0).toUpperCase() + mode.slice(1));
-        if (activeBtn) activeBtn.classList.add('active');
+        modes.forEach(m => {
+            const btn = document.getElementById('btn' + m);
+            if (btn) {
+                if (m.toLowerCase() === mode.toLowerCase()) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            }
+        });
 
-        // Uppdatera interna tillstånd för att vara ömsesidigt uteslutande
+        // Uppdatera interna tillstånd
         if (mode === 'home') {
             window.isHome = true; window.isSleeping = false;
             let msg = window.isLukasMode ? "Välkommen tillbaka Andreas. Jag har vaktat Lukas." : "Välkommen hem Andreas.";
@@ -223,20 +232,21 @@ export function initLogic(ui, brain, vision, audio) {
     window.toggleLukasMode = () => {
         window.isLukasMode = !window.isLukasMode;
         const btn = document.getElementById('btnLukas');
-        btn?.classList.toggle('active', window.isLukasMode);
+        if (btn) btn.classList.toggle('active', window.isLukasMode);
+        
         let msg = window.isLukasMode ? "Lukas-läge aktiverat. Full beskyddar-protokoll online." : "Lukas-läge avaktiverat.";
         audio.speak(msg); window.appendMessage('AI', msg);
         window.syncCloudMemory();
     };
 
     window.toggleVakt = () => {
-        const btn = document.getElementById('btnVakt');
         window.vaktMode = !window.vaktMode;
+        const btn = document.getElementById('btnVakt');
+        if (btn) btn.classList.toggle('active', window.vaktMode);
+        
         if (window.vaktMode) {
-            btn?.classList.add('active');
             window.appendMessage('AI', "Vaktläge aktiverat. Full systemskanning påbörjad.");
         } else {
-            btn?.classList.remove('active');
             window.appendMessage('AI', "Vaktläge avaktiverat. Skannar ej yttre zon.");
         }
         window.syncCloudMemory();
