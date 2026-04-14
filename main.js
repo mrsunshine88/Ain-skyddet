@@ -97,8 +97,8 @@ const server = http.createServer((req, res) => {
 
     const allowedFiles = [
         '/mobile.html', '/mobile.js', '/mobile.css', '/manifest.json', '/sw.js',
-        '/index.html', '/app.js', '/index.css', '/supabase.client.js', '/supabase.js',
-        '/vision.js', '/app_security.js', '/audio_engine.js', '/ui_manager.js'
+        '/index.html', '/app.js', '/index.css', '/supabase.client.js',
+        '/vision.js', '/app_security.js', '/audio.js', '/brain.js', '/app_logic.js'
     ];
 
     if (allowedFiles.includes(url) || url.startsWith('/profiles/') || url.startsWith('/incidents/')) {
@@ -159,7 +159,7 @@ app.on('ready', () => {
             backgroundThrottling: false
         } 
     });
-    mainWindow.loadFile('index.html');
+    mainWindow.loadURL('http://localhost:9999');
     mainWindow.webContents.openDevTools(); // Öppnar diagnostikfönstret automatiskt för felsökning
 });
 
