@@ -27,14 +27,15 @@ export class Vision {
         const img = off.toDataURL('image/jpeg', 0.5).split(',')[1];
 
         try {
-            const res = await fetch('http://127.0.0.1:11434/api/chat', {
+            const host = window.location.hostname || '127.0.0.1';
+            const res = await fetch(`http://${host}:11434/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'system', content: "Du är en AI-assistent som observerar personen framför dig. Beskriv kortfattat hur personen verkar må och om de ser ut att vara uppmärksamma på dig. Skriv naturligt, som en vän." },
-                        { role: 'user', content: "Beskriv personen och deras humör/fokus. Max 6 ord.", images: [img] }
+                        { role: 'system', content: "Du är en AI-assistent som observerar personen framför dig. Beskriv kortfattat hur personen verkar må och om de ser ut att vara uppmärksamma på dig. Skriv naturligt och vänligt på svenska." },
+                        { role: 'user', content: "Beskriv personens humör och fokus med en naturlig svensk mening (max 15 ord).", images: [img] }
                     ],
                     stream: false
                 })
@@ -48,13 +49,13 @@ export class Vision {
                 .replace(/\bandreas\b/g, 'du')
                 .replace(/ ser /g, ' ser ut ')
                 .trim();
-            
+
             // Stor bokstav i början
             insight = insight.charAt(0).toUpperCase() + insight.slice(1);
 
             if (this.activeUser && this.activeUser !== "Okänd") {
                 this.brain.addInsight(this.activeUser, insight);
-                
+
                 // --- NYTT: Uppdatera globalt humör för spegling ---
                 if (insight.toLowerCase().includes("stress") || insight.toLowerCase().includes("trött")) {
                     this.brain.brainData.general.current_mood = "Stressed";
@@ -63,7 +64,7 @@ export class Vision {
                 } else {
                     this.brain.brainData.general.current_mood = "Neutral";
                 }
-                
+
                 return insight;
             }
         } catch (e) {
@@ -72,9 +73,8 @@ export class Vision {
         return null;
     }
 
-    getBrightness() {
-        const ctx = this.canvas.getContext('2d');
-        const imageData = ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+    getBrightness(ctx, width, height) {
+        const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
         let r, g, b, avg;
         let colorSum = 0;
@@ -87,54 +87,40 @@ export class Vision {
             colorSum += avg;
         }
 
-        return Math.floor(colorSum / (this.canvas.width * this.canvas.height));
+        return Math.floor(colorSum / (width * height));
     }
 
-    // --- NYTT: FÖRSTÄRK MÖRKERBILDER ---
-    enhanceNightImage(ctx, width, height) {
-        const brightness = this.getBrightness();
-        if (brightness < 80) {
-            // Justerad till 1.2 för att eliminera digitalt brus enligt instruktion
-            ctx.filter = 'contrast(1.2) brightness(1.2)';
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = width;
-            tempCanvas.height = height;
-            tempCanvas.getContext('2d').drawImage(this.canvas, 0, 0);
-            ctx.filter = 'none';
-            ctx.drawImage(tempCanvas, 0, 0);
-            console.log(`[Vision] Natt-optimering (Ljusstyrka: ${brightness})`);
-        }
-    }
+
 
     async recognizeFace(sourceElement = null) {
         const source = sourceElement || this.video;
         if (source instanceof HTMLVideoElement && source.readyState !== 4) return [];
-        
+
         const off = document.createElement('canvas');
         off.width = 640;
         off.height = 480;
         const ctx = off.getContext('2d');
         ctx.drawImage(source, 0, 0, 640, 480);
-        
+
         return new Promise((resolve) => {
             off.toBlob(async (blob) => {
                 if (!blob) { resolve([]); return; }
                 const fd = new FormData();
                 fd.append('image', blob, 'scan.jpg');
-                fd.append('min_confidence', '0.15');
-                
+                fd.append('min_confidence', '0.60');
+
                 try {
-                    const res = await fetch('http://127.0.0.1:32168/v1/vision/face/recognize', { 
-                        method: 'POST', 
-                        body: fd 
+                    const res = await fetch('http://127.0.0.1:32168/v1/vision/face/recognize', {
+                        method: 'POST',
+                        body: fd
                     });
                     const data = await res.json();
                     let detectedUsers = [];
-                    
+
                     if (data.success && data.predictions?.length > 0) {
                         detectedUsers = data.predictions.map(p => p.userid || p.label || "Okänd");
                     }
-                    
+
                     const primaryName = detectedUsers[0] || "Okänd";
                     const now = Date.now();
 
@@ -150,7 +136,7 @@ export class Vision {
                             this.activeUser = "Okänd";
                         }
                     }
-                    
+
                     this.lastObservedUser = primaryName;
                     resolve(detectedUsers);
                 } catch (e) {
@@ -161,82 +147,129 @@ export class Vision {
         });
     }
 
-    async registerFace(name) {
-        const off = document.createElement('canvas');
-        off.width = 640;
-        off.height = 480;
-        const ctx = off.getContext('2d');
-        const source = this.video || document.querySelector('video');
-        ctx.drawImage(source, 0, 0, 640, 480);
-        
+    async registerFace(imageSource, name) {
+        // Om imageSource är en base64-sträng, använd den. Annars ta en snapshot från videon.
+        let base64 = imageSource;
+        if (!imageSource.startsWith('data:image')) {
+            const source = document.getElementById('academyPreview') || this.video || document.querySelector('video');
+            const off = document.createElement('canvas');
+            off.width = 640;
+            off.height = 480;
+            const ctx = off.getContext('2d');
+            ctx.drawImage(source, 0, 0, 640, 480);
+            base64 = off.toDataURL('image/jpeg', 0.95);
+        }
+
         return new Promise((resolve) => {
             const globalTimeout = setTimeout(() => {
                 console.error("Registrering avbruten: Servern svarade inte inom 60s.");
                 resolve({ success: false, error: "AI_SERVER_OVERLOAD" });
             }, 60000);
 
-            off.toBlob(async (blob) => {
-                if (!blob) { 
-                    clearTimeout(globalTimeout);
-                    resolve({ success: false, error: "IMAGE_FAIL" }); 
-                    return; 
-                }
-                const fd = new FormData();
-                fd.append('image', blob, 'face.jpg');
-                fd.append('userid', name);
-                
-                try {
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 55000);
+            const rawBase64 = base64.replace(/^data:image\/jpeg;base64,/, "");
+            const binaryString = window.atob(rawBase64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            const blob = new Blob([bytes], { type: 'image/jpeg' });
 
-                    const res = await fetch('http://127.0.0.1:32168/v1/vision/face/register', { 
-                        method: 'POST', 
-                        body: fd,
-                        signal: controller.signal
-                    });
-                    
+            if (!blob) {
+                clearTimeout(globalTimeout);
+                resolve({ success: false, error: "IMAGE_FAIL" });
+                return;
+            }
+
+            const fd = new FormData();
+            fd.append('image', blob, 'face.jpg');
+            fd.append('userid', name);
+
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 55000);
+
+                fetch('http://127.0.0.1:32168/v1/vision/face/register', {
+                    method: 'POST',
+                    body: fd,
+                    signal: controller.signal
+                }).then(async (res) => {
+                    clearTimeout(timeoutId);
+                    clearTimeout(globalTimeout);
+
                     if (res.ok) {
                         this.activeUser = name;
-                        
-                        // --- NYTT: Fysisk lagring på disk vid träning ---
-                        const base64 = off.toDataURL('image/jpeg', 0.95);
-                        window.ipcRenderer.invoke('save-face-image', { 
-                            base64: base64, 
-                            name: name, 
-                            index: Date.now() 
+                        // Spara fysiskt till disk
+                        window.ipcRenderer.invoke('save-face-image', {
+                            base64: base64,
+                            name: name
                         }).catch(e => console.error("Kunde inte spara fysisk träningsbild:", e));
 
                         resolve({ success: true });
                     } else {
                         resolve({ success: false, error: `SERVER_ERR_${res.status}` });
                     }
-                } catch (e) {
+                }).catch(e => {
+                    clearTimeout(timeoutId);
                     clearTimeout(globalTimeout);
-                    resolve({ success: false, error: e.name === 'AbortError' ? "SERVER_STUCK" : "CONNECTION_FAIL" });
-                }
-            }, 'image/jpeg', 0.95);
+                    resolve({ success: false, error: "CONNECTION_FAIL" });
+                });
+            } catch (e) {
+                clearTimeout(globalTimeout);
+                resolve({ success: false, error: "CONNECTION_FAIL" });
+            }
         });
     }
 
-    // --- NYTT: BURST-REGISTRERING (10 foton) ---
+    // --- NYTT: BURST-REGISTRERING (5 foton) ---
     async registerFaceBurst(name, onProgress) {
         let successCount = 0;
-        const source = this.video || document.querySelector('video');
-        
+        const source = document.getElementById('academyPreview') || this.video || document.querySelector('video');
+
         for (let i = 0; i < 5; i++) {
             if (onProgress) onProgress(i + 1);
+
+            // Pausa 800ms för att låta renderingen hinna med och undvika svarta bilder från nystartad kamera
+            await new Promise(r => setTimeout(r, 800));
+
             const snap = await this.captureSnapshot(source);
             if (snap) {
+                // 1. Spara till AI-motorns minne
                 const ok = await this.registerFace(snap, name);
-                if (ok) successCount++;
+                if (ok) {
+                    successCount++;
+                    // 2. Spara fysiskt till disk (profiles-mappen)
+                    try {
+                        const { ipcRenderer } = require('electron');
+                        await ipcRenderer.invoke('save-face-image', { name, base64: snap });
+                    } catch (e) {
+                        console.warn("Kunde inte spara Academy-bild till disk:", e);
+                    }
+                }
             }
-            await new Promise(r => setTimeout(r, 600)); // 600ms mellanrum för att få olika vinklar
+            await new Promise(r => setTimeout(r, 600));
         }
-        return successCount >= 3; // Kräver minst 3 lyckade bilder
+        return successCount >= 3;
     }
 
-    // --- NYTT: AKTIVT ANSIKTSMINNE ---
-    // Möjliggör The AI att "träna" in ett ansikte i efterhand direkt från utekamerans larmbild
+    async recognizePlateFromBase64(base64) {
+        if (!base64) return null;
+        try {
+            const rawBase64 = base64.replace(/^data:image\/jpeg;base64,/, "");
+            const res = await fetch('http://127.0.0.1:32168/v1/vision/alpr', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: rawBase64 })
+            });
+            const data = await res.json();
+            if (data.success && data.predictions && data.predictions.length > 0) {
+                return data.predictions[0].plate || null;
+            }
+        } catch (e) {
+            console.error("[VISION] ALPR misslyckades:", e);
+        }
+        return null;
+    }
+
     async recognizeFaceFromBase64(base64) {
         if (!base64) return null;
         try {
@@ -244,12 +277,14 @@ export class Vision {
             const res = await fetch('http://127.0.0.1:32168/v1/vision/face/recognize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: rawBase64, min_confidence: 0.35 })
+                body: JSON.stringify({ image: rawBase64, min_confidence: 0.40 }) // Sänkt tröskel till 40% för bättre träffsäkerhet i svåra vinklar
             });
             const data = await res.json();
             if (data.success && data.predictions && data.predictions.length > 0) {
                 const best = data.predictions[0];
-                if (best.userid && best.userid !== "unknown") return best.userid;
+                // BREDD-SÖK: Kolla alla fält där namnet kan gömma sig
+                const detectedName = best.userid || best.label || best.person;
+                if (detectedName && detectedName !== "unknown") return detectedName;
             }
         } catch (e) {
             console.error("[VISION] Ansiktsigenkänning misslyckades:", e);
@@ -257,44 +292,17 @@ export class Vision {
         return null;
     }
 
-    async registerFaceFromBase64(name, base64Image) {
-        if (!base64Image || !name) return false;
-        try {
-            const rawBase64 = base64Image.replace(/^data:image\/jpeg;base64,/, "");
-            const binaryString = window.atob(rawBase64);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            const blob = new Blob([bytes], { type: 'image/jpeg' });
-            
-            const fd = new FormData();
-            fd.append('image', blob, 'training.jpg');
-            fd.append('userid', name);
-            fd.append('min_confidence', '0.35'); // NYTT: Tillåt registrering från svårare vinklar
-            
-            const res = await fetch('http://127.0.0.1:32168/v1/vision/face/register', { 
-                method: 'POST', 
-                body: fd 
-            });
-            const data = await res.json();
-            return data.success;
-        } catch (e) {
-            console.error("Aktiv träning misslyckades:", e);
-            return false;
-        }
-    }
+
 
     async deleteFace(name) {
         if (!name || name === "Okänd") return false;
         const fd = new FormData();
         fd.append('userid', name);
-        
+
         try {
-            await fetch('http://localhost:32168/v1/vision/face/delete', { 
-                method: 'POST', 
-                body: fd 
+            await fetch('http://localhost:32168/v1/vision/face/delete', {
+                method: 'POST',
+                body: fd
             });
             this.activeUser = "Okänd";
             return true;
@@ -307,26 +315,26 @@ export class Vision {
     async detectObjects(sourceElement = null) {
         const source = sourceElement || this.video;
         if (source instanceof HTMLVideoElement && source.readyState !== 4) return [];
-        
+
         const off = document.createElement('canvas');
         off.width = 640;
         off.height = 480;
         const ctx = off.getContext('2d');
         ctx.drawImage(source, 0, 0, 640, 480);
-        
+
         return new Promise((resolve) => {
             off.toBlob(async (blob) => {
                 if (!blob) { resolve([]); return; }
                 const fd = new FormData();
                 fd.append('image', blob, 'surveillance.jpg');
                 fd.append('min_confidence', '0.15');
-                
+
                 try {
                     const controller = new AbortController();
                     const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 sekunder. CP AI behöver tid första gången en modell startas.
 
-                    const res = await fetch('http://127.0.0.1:32168/v1/vision/detection', { 
-                        method: 'POST', 
+                    const res = await fetch('http://127.0.0.1:32168/v1/vision/detection', {
+                        method: 'POST',
                         body: fd,
                         signal: controller.signal
                     });
@@ -369,7 +377,7 @@ export class Vision {
 
         const fd = new FormData();
         fd.append('image', blob, 'plate.jpg');
-        
+
         try {
             const res = await fetch('http://127.0.0.1:32168/v1/vision/alpr', { method: 'POST', body: fd });
             const data = await res.json();
@@ -384,7 +392,7 @@ export class Vision {
     async captureSnapshot(sourceElement = null) {
         const source = sourceElement || this.video;
         if (source instanceof HTMLVideoElement && source.readyState !== 4) return null;
-        
+
         const off = document.createElement('canvas');
         const w = source.videoWidth || source.naturalWidth || 1280;
         const h = source.videoHeight || source.naturalHeight || 720;
@@ -392,7 +400,7 @@ export class Vision {
         off.height = h;
         const ctx = off.getContext('2d');
         ctx.drawImage(source, 0, 0, w, h);
-        
+
         // Ögonblicksbilder får också natt-boost om det behövs
         const brightness = this.getBrightnessFromCanvas(off);
         if (brightness < 80) {
@@ -409,7 +417,7 @@ export class Vision {
         const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
         let sum = 0;
         for (let i = 0; i < data.length; i += 4) {
-            sum += (data[i] + data[i+1] + data[i+2]) / 3;
+            sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
         }
         return sum / (canvas.width * canvas.height);
     }
@@ -438,7 +446,7 @@ export class Vision {
             const fd = new FormData();
             fd.append('image', blob, `${zoneName}.jpg`);
             fd.append('min_confidence', '0.15');
-            
+
             fetch('http://127.0.0.1:32168/v1/vision/face/recognize', { method: 'POST', body: fd })
                 .then(res => res.json())
                 .then(data => {
@@ -455,8 +463,9 @@ export class Vision {
     async getSnapshotFromFrigate(eventId, crop = false) {
         if (!eventId) return null;
         try {
-            console.log(`[VISION-DIAG] Försöker hämta händelse-snapshot för ${eventId} (Crop: ${crop})...`);
-            const url = `http://localhost:5050/api/events/${eventId}/snapshot.jpg${crop ? '?crop=1' : ''}`;
+            console.log(`[VISION-DIAG] Hämtar REN bild (utan rutor) för ${eventId} (Crop: ${crop})...`);
+            // bbox=0 tvingar Frigate att skicka en ren bild utan de rosa rutorna
+            const url = `http://localhost:5050/api/events/${eventId}/snapshot.jpg?bbox=0${crop ? '&crop=1' : ''}`;
             const res = await fetch(url);
             if (!res.ok) return null;
             const blob = await res.blob();
@@ -468,100 +477,102 @@ export class Vision {
         } catch (e) { return null; }
     }
 
-    // --- NYTT: Hämta bild i exakt realtid (Strunta i gamla händelser) ---
-    async getLiveSnapshotFromFrigate(cameraName) {
-        try {
-            console.log(`[VISION-DIAG] Tar ett live-foto från ${cameraName} just nu...`);
-            const res = await fetch(`http://localhost:5050/api/${cameraName}/latest.jpg`);
-            if (!res.ok) return null;
-            const blob = await res.blob();
-            return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result);
-                reader.readAsDataURL(blob);
-            });
-        } catch (e) { return null; }
-    }
+
 
     // --- NYTT: TRÄNA ANSIKTE ---
-    async registerFace(base64Image, name) {
+    async registerFaceFromBase64(name, base64Image) {
         if (!base64Image) return false;
         try {
-            const rawBase64 = base64Image.replace(/^data:image\/jpeg;base64,/, "");
-            const blob = await (await fetch(base64Image)).blob();
-            
+            // Stabil metod: Skapa blob manuellt för att undvika nätverksfel i Electron
+            const rawBase64 = base64Image.replace(/^data:image\/\w+;base64,/, "");
+            const binaryString = window.atob(rawBase64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            const blob = new Blob([bytes], { type: 'image/jpeg' });
+
             const fd = new FormData();
             fd.append('image', blob, `${name}.jpg`);
             fd.append('userid', name);
+            fd.append('name', name);
+            fd.append('id', name);
 
-            const res = await fetch('http://127.0.0.1:32168/v1/vision/face/register', {
+            const host = '127.0.0.1';
+            const res = await fetch(`http://${host}:32168/v1/vision/face/register`, {
                 method: 'POST',
                 body: fd
             });
+
             const data = await res.json();
             console.log(`[ACADEMY] Registreringssvar för ${name}:`, data);
-            return data.success;
+            return data.success === true || data.code === 200;
         } catch (e) {
             console.error("[ACADEMY] Fel vid ansiktsregistrering:", e);
             return false;
         }
     }
 
-    async analyzeIntruder(snap, label, camera = "", movementContext = "") {
+    async analyzeIntruder(snap, label, identity = null, camera = "", movementContext = "") {
         try {
-            let context = "Beskriv vad personen gör." + movementContext;
-            if (camera === "Infarten") context = "Du ser uppfarten och vägen. Ignorera den SILVER-färgade bilen.";
-            else if (camera === "Ytterdorren") context = "Du ser ytterdörren och trappen.";
+            const labelMap = { "person": "person", "car": "bil", "motorcycle": "motorcykel", "dog": "hund", "cat": "katt" };
+            const labelSwe = labelMap[label] || label;
 
-            // --- DIN PERFEKTA MANUAL (Klinisk & Ärlig) ---
-            const timeStr = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-            let sysHeader = `# DIN ROLL: Övervakningsexpert i ett HUS. Ge en UTFÖRLIG och klinisk rapport på 3-4 meningar på SVENSKA. Klockan: ${timeStr}.\n`;
-            sysHeader += "# TRÄDGÅRDS-LAYOUT: Ytterdörren (huset) <-> Garaget (mitten) <-> Infarten (vägen). Dessa tre zoner hänger ihop i serieföljd.\n";
-            sysHeader += "# KONTEXT: Du befinner dig i ett HUS. Använd alltid namnet som anges i loggen för att identifiera personer.\n";
-            sysHeader += "# RAPPORTERING: Beskriv rörelse mellan zonerna (t.ex. 'rör sig vidare mot...', 'passerar...'). Var detaljerad men 100% ärlig.\n";
-            
-            const prompt = `${sysHeader}
-            Kamera: ${camera}. Objekt: ${label}. Kontext: ${context}`;
-            
-            const rawBase64 = snap.replace(/^data:image\/jpeg;base64,/, "");
-            
-            const res = await fetch('http://127.0.0.1:11434/api/chat', {
+            let sysMessage = `Svara endast på svenska. Beskriv objektet ${labelSwe} med kön, hårfärg, kläder och position i en kort mening. Använd max 15 ord och svara aldrig på engelska.`;
+            sysMessage += `\nSvara direkt med beskrivningen utan inledning.`;
+
+            const prompt = sysMessage;
+            // Robust bildrensning som hanterar alla format (jpeg, png, webp etc)
+            const rawBase64 = snap.replace(/^data:image\/\w+;base64,/, "");
+
+            const host = '127.0.0.1';
+            const res = await fetch(`http://${host}:11434/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'system', content: prompt },
-                        { role: 'user', content: "Ge en detaljerad och objektiv rapport om personen på bilden." }
+                        { role: 'user', content: prompt, images: [rawBase64] }
                     ],
-                    options: { 
-                        num_predict: 250, 
-                        temperature: 0.0, 
-                        stop: ["\n", "Bild:", "Status:"] 
-                    },
+                    options: { num_predict: 50, temperature: 0.1, repeat_penalty: 1.5, top_p: 0.4 },
                     stream: false
                 })
+            }).catch(async () => {
+                const remoteHost = window.location.hostname || '127.0.0.1';
+                return await fetch(`http://${remoteHost}:11434/api/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: this.visionModel,
+                        messages: [
+                            { role: 'user', content: prompt, images: [rawBase64] }
+                        ],
+                        options: { num_predict: 50, temperature: 0.1, repeat_penalty: 1.5, top_p: 0.4 },
+                        stream: false
+                    })
+                });
             });
             const data = await res.json();
             const content = data.message?.content || "";
-            
-            // Extrahering för intelligenta beslut
+
+            // Analysera innehåll för logik efteråt
             let classification = label === "person" ? "Människa" : "Fordon";
             let threatLevel = 1;
+            let isChild = content.toLowerCase().includes("barn") || content.toLowerCase().includes("liten person");
 
-            if (content.toLowerCase().includes("barn")) classification = "Barn";
-            if (content.toUpperCase().includes("HOT: HÖG")) threatLevel = 3;
-            else if (content.toUpperCase().includes("HOT: MEDEL")) threatLevel = 2;
+            if (isChild) classification = "Barn";
+            if (content.toLowerCase().includes("mask") || content.toLowerCase().includes("bryta") || content.toLowerCase().includes("smid") || content.toLowerCase().includes("hot")) threatLevel = 3;
 
             return {
                 description: content,
                 classification: classification,
+                isChild: isChild,
                 threatLevel: threatLevel,
                 isAccident: content.toLowerCase().includes("marken") || content.toLowerCase().includes("skadad")
             };
         } catch (e) {
             console.error("VLM-Beskrivning misslyckades:", e);
-            return { description: "Analys misslyckades.", classification: "Okänd", threatLevel: 1 };
+            return { description: "Analys misslyckades på grund av tekniskt fel.", classification: "Okänd", threatLevel: 1 };
         }
     }
 
@@ -573,10 +584,11 @@ export class Vision {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 45000);
 
-            // NYTT: System-prompt för att dölja instruktionerna från användaren
-            const systemPrompt = "Du är en assistent som analyserar säkerhetskameror. Titta extremt noga på bilden. Om du ser fordon, beskriv deras färg och märke. Svara kortfattat och ta inte med instruktionerna i ditt svar.";
+            // NEUTRALISERAD SYSTEM-PROMPT (För att undvika AI-vägran)
+            const systemPrompt = "Du är en assistent som beskriver bilder objektivt på svenska. Titta noga på bilden och svara kortfattat på användarens fråga. Beskriv färger, former och handlingar utan att nämna övervakning eller säkerhet.";
 
-            const res = await fetch('http://127.0.0.1:11434/api/chat', {
+            const host = window.location.hostname || '127.0.0.1';
+            const res = await fetch(`http://${host}:11434/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -585,6 +597,7 @@ export class Vision {
                         { role: 'system', content: systemPrompt },
                         { role: 'user', content: questionText, images: [rawBase64] }
                     ],
+                    options: { num_predict: 250, temperature: 0.0 },
                     stream: false
                 }),
                 signal: controller.signal

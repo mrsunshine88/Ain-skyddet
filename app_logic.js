@@ -133,14 +133,14 @@ export function initLogic(ui, brain, vision, audio) {
                 }
 
                 // 3. Generera det slutgiltiga sammanslagna svaret
-                const finalPrompt = `Användaren (Andreas) frågar: "${text}". Här är vad jag ser på mina olika kameror:\n${multiContext.join("\n")}\n\nSvara nu Andreas på ett naturligt sätt baserat på all denna info.`;
+                const finalPrompt = `Användaren frågar: "${text}". Här är vad jag ser på mina olika kameror just nu:\n${multiContext.join("\n")}\n\nSvara nu baserat på denna händelseutveckling. Om Lukas-läge (${window.isLukasMode ? 'PÅ' : 'AV'}) är aktivt, svara som hans beskyddare.`;
                 const finalReply = await brain.getOllamaResponse(window.brainModel, [{ role: 'user', content: finalPrompt }]);
                 
                 window.appendMessage('AI', finalReply);
                 if (window.canSpeakNow()) audio.speak(finalReply);
             } catch (e) { 
                 console.error("Verifieringsfel:", e); 
-                window.appendMessage('AI', "Jag kunde inte nå Frigate för att verifiera läget just nu.");
+                window.appendMessage('AI', "Mina ögon (kamerorna) svarar inte just nu, så jag kan inte bekräfta säkerheten. Jag föredrar att vara tyst framför att gissa.");
             }
             window.isThinking = false;
             return;
@@ -154,16 +154,16 @@ export function initLogic(ui, brain, vision, audio) {
             const timeStr = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
             const sitting = Math.floor(brain.brainData.users["Andreas"]?.sittingMinsToday || 0);
             
-            let sysHeader = `# DIN ROLL: Övervakningsexpert i ett HUS. Ge en UTFÖRLIG och klinisk rapport på 3-4 meningar på SVENSKA. Klockan: ${timeStr}.\n`;
-            sysHeader += "# TRÄDGÅRDS-LAYOUT: Ytterdörren (huset) <-> Garaget (mitten) <-> Infarten (vägen). Dessa tre zoner hänger ihop i serieföljd.\n";
-            sysHeader += "# KONTEXT: Du befinner dig i ett HUS. Använd alltid namnet som anges i loggen för att identifiera personer.\n";
-            sysHeader += "# RAPPORTERING: Beskriv rörelse mellan zonerna (t.ex. 'rör sig vidare mot...', 'passerar...'). Var detaljerad men 100% ärlig.\n";
+            let sysHeader = `# DIN ROLL: Du är JARVIS, en digital riddare och beskyddare. Du pratar direkt med personen som frågar.\n`;
+            if (window.isLukasMode) sysHeader += "# RIDDAR-PROTOKOLL: AKTIVERAT. Du vaktar Lukas. Ton: Formell, orubblig, extremt lojal. Du adresserar honom som Lukas.\n";
+            sysHeader += "# TRÄDGÅRDS-LAYOUT: Ytterdörren <-> Garaget <-> Infarten. Zonerna hänger ihop.\n";
+            sysHeader += "# REGEL: Svara aldrig baserat på gamla loggar om säkerheten ifrågasätts. Du SKA se efter själv.\n";
 
             const incidents = (window.incidents || []).slice(-3).map(i => i.detail).join(". ");
-            const memories = JSON.stringify(brain.brainData.users["Andreas"]?.facts || []);
+            const memories = JSON.stringify(brain.brainData.users[window.isLukasMode ? "Lukas" : "Andreas"]?.facts || []);
             
-            let statusContext = incidents ? `SENASTE AKTIVITET: ${incidents}` : "Ingen aktivitet har rapporterats nyss.";
-            let sysPrompt = `${sysHeader}# SYSTEM-STATUS: ${statusContext}\n# MINNE: ${memories}\n${brain.brainData.general.personality}\nVIKTIGT: Gissa aldrig. Om inget finns i loggen, säg att läget verkar stabilt utifrån de senaste loggarna.`;
+            let statusContext = incidents ? `AKTIVITET PÅ TOMTEN: ${incidents}` : "Det har varit lugnt i loggarna den senaste tiden.";
+            let sysPrompt = `${sysHeader}# BAKGRUND: ${statusContext}\n# PERSON-KÄNNS-IGEN: ${memories}\n${brain.brainData.general.personality}\nVIKTIGT: Säg aldrig 'utifrån loggarna'. Om du inte har en ny bild, be om tillåtelse att titta live.`;
 
             const fullOutput = await brain.getOllamaResponse(window.brainModel, [
                 { role: 'system', content: sysPrompt },
@@ -260,9 +260,30 @@ export function initLogic(ui, brain, vision, audio) {
         audio.speak("Här är vad som hänt medan du var borta.");
     };
 
-    window.toggleAcademy = () => {
+    window.toggleAcademy = async () => {
         const overlay = document.getElementById('academyOverlay');
-        if (overlay) overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
+        const video = document.getElementById('academyPreview');
+        if (!overlay || !video) return;
+        
+        const isOpen = overlay.style.display !== 'none';
+
+        if (!isOpen) {
+            overlay.style.display = 'flex';
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                video.srcObject = stream;
+                window.academyStream = stream;
+            } catch (e) {
+                console.error("Kunde inte starta Academy-kameran:", e);
+                window.appendMessage('System', "⚠️ Kunde inte starta webbkameran. Kontrollera behörigheter.");
+            }
+        } else {
+            overlay.style.display = 'none';
+            if (window.academyStream) {
+                window.academyStream.getTracks().forEach(track => track.stop());
+                window.academyStream = null;
+            }
+        }
     };
 
     window.trainPerson = async (name) => {
@@ -278,6 +299,8 @@ export function initLogic(ui, brain, vision, audio) {
             brain.saveBrain();
             window.appendMessage('AI', `Träning slutförd. ${name} är nu en del av mitt långtidsminne.`);
             audio.speak(`Klart! Jag känner igen ${name} i alla lägen nu.`);
+            // Stäng Academy först nu när bilderna är säkrade
+            setTimeout(() => window.toggleAcademy(), 2000); 
         } else {
             window.appendMessage('AI', "Kunde inte slutföra träning. Kontrollera att kameran ser ansiktet tydligt.");
         }

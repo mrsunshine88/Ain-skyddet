@@ -14,12 +14,12 @@ process.on('uncaughtException', (error) => {
 
 
 const INCIDENT_DIR = path.join(__dirname, 'incidents');
-const VEHICLE_DIR = path.join(INCIDENT_DIR, 'vehicles');
 const PROFILE_DIR = path.join(__dirname, 'profiles');
+const VEHICLE_DIR = path.join(PROFILE_DIR, 'Vehicles');
 
 if (!fs.existsSync(INCIDENT_DIR)) fs.mkdirSync(INCIDENT_DIR);
-if (!fs.existsSync(VEHICLE_DIR)) fs.mkdirSync(VEHICLE_DIR, { recursive: true });
 if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR);
+if (!fs.existsSync(VEHICLE_DIR)) fs.mkdirSync(VEHICLE_DIR, { recursive: true });
 
 let mainWindow;
 
@@ -39,23 +39,77 @@ const streams = {};
 
 const server = http.createServer((req, res) => {
     const url = req.url;
+    // --- API & Webbfiler ---
     res.setHeader('Access-Control-Allow-Origin', '*');
-    
-    // API-logik behålls, kamerasändning raderad
-    if (url === '/api/health') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({
-            status: 'online',
-            frigate: 'online',
-            cameras: { 'cam1': 'online', 'cam2': 'online', 'cam3': 'online' }
-        }));
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        return res.end();
     }
 
-    if (url === '/mobile.html' || url === '/mobile.js' || url === '/mobile.css' || url === '/manifest.json' || url === '/sw.js') {
+    if (url.startsWith('/api/health')) {
+        const status = {
+            server: 'online',
+            frigate: 'offline',
+            cameras: {}
+        };
+
+        // Snabb-check av Frigate (timeout på 500ms för att inte låsa UI:t)
+        let sent = false;
+        const sendStatus = () => {
+            if (sent) return;
+            sent = true;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(status));
+        };
+
+        const frigateReq = http.request({ 
+            hostname: '127.0.0.1', 
+            port: 5050, 
+            path: '/api/stats', 
+            method: 'GET',
+            timeout: 2000 
+        }, (fRes) => {
+            status.frigate = fRes.statusCode === 200 ? 'online' : 'error';
+            sendStatus();
+        });
+
+        frigateReq.on('error', () => {
+            sendStatus(); // Skicka stats ändå, även om frigate är nere
+        });
+
+        frigateReq.on('timeout', () => {
+            frigateReq.destroy();
+            sendStatus();
+        });
+
+        frigateReq.end();
+        return;
+    }
+
+    if (url === '/' || url === '/index.html') {
+        const p = path.join(__dirname, 'index.html');
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end(fs.readFileSync(p));
+    }
+
+    const allowedFiles = [
+        '/mobile.html', '/mobile.js', '/mobile.css', '/manifest.json', '/sw.js',
+        '/index.html', '/app.js', '/index.css', '/supabase.client.js', '/supabase.js',
+        '/vision.js', '/app_security.js', '/audio_engine.js', '/ui_manager.js'
+    ];
+
+    if (allowedFiles.includes(url) || url.startsWith('/profiles/') || url.startsWith('/incidents/')) {
         const p = path.join(__dirname, url.substring(1));
         if (fs.existsSync(p)) {
-            const mime = { '.html':'text/html', '.js':'text/javascript', '.css':'text/css', '.json':'application/json' };
-            res.writeHead(200, { 'Content-Type': mime[path.extname(p)] || 'text/plain' });
+            const ext = path.extname(p);
+            const mime = { 
+                '.html':'text/html', '.js':'text/javascript', '.css':'text/css', 
+                '.json':'application/json', '.png':'image/png', '.jpg':'image/jpeg' 
+            };
+            res.writeHead(200, { 'Content-Type': mime[ext] || 'text/plain' });
             return res.end(fs.readFileSync(p));
         }
     }
@@ -65,50 +119,12 @@ const server = http.createServer((req, res) => {
         req.on('data', c => body += c);
         req.on('end', () => {
             const oReq = http.request({ hostname: '127.0.0.1', port: 11434, path: '/api/chat', method: 'POST' }, (oRes) => {
-                res.writeHead(oRes.statusCode, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+                res.writeHead(oRes.statusCode, { 'Content-Type': 'application/json' });
                 oRes.pipe(res);
             });
-            oReq.on('error', () => { res.writeHead(500); res.end("Error"); });
+            oReq.on('error', () => { res.writeHead(500); res.end(JSON.stringify({error: "Ollama offline"})); });
             oReq.write(body); oReq.end();
         });
-        return;
-    }
-
-    if (url.startsWith('/api/health')) {
-        logToWindow("[HEALTH] Kontrollerar kameror...", 'info');
-        const status = {};
-        for (const id in CAMERAS) {
-            const s = streams[id];
-            const isAlive = s && s.process && !s.process.killed;
-            const dataAge = s ? (Date.now() - (s.lastDataTime || 0)) : 999999;
-            
-            if (!isAlive) status[id] = 'offline';
-            else if (dataAge < 5000) status[id] = 'online';
-            else status[id] = 'buffering';
-        }
-
-        const frigateReq = http.request({ hostname: '127.0.0.1', port: 5050, path: '/api/stats', timeout: 1000 }, (fRes) => {
-            let data = '';
-            fRes.on('data', c => data += c);
-            fRes.on('end', () => {
-                try {
-                    const stats = JSON.parse(data);
-                    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-                    res.end(JSON.stringify({ cameras: status, frigate: 'online', frigateStats: stats }));
-                    logToWindow("[HEALTH] Frigate Online", 'info');
-                } catch(e) {
-                    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-                    res.end(JSON.stringify({ cameras: status, frigate: 'error' }));
-                    logToWindow("[HEALTH] Frigate JSON-fel", 'err');
-                }
-            });
-        });
-        frigateReq.on('error', () => {
-            res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-            res.end(JSON.stringify({ cameras: status, frigate: 'offline' }));
-            logToWindow("[HEALTH] Frigate Offline (Hjärnan svarar ej)", 'warn');
-        });
-        frigateReq.end();
         return;
     }
 
@@ -147,20 +163,41 @@ app.on('ready', () => {
     mainWindow.webContents.openDevTools(); // Öppnar diagnostikfönstret automatiskt för felsökning
 });
 
+ipcMain.handle('list-profiles', async () => {
+    if (!fs.existsSync(PROFILE_DIR)) return [];
+    const dirs = fs.readdirSync(PROFILE_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+    
+    const archive = {};
+    for (const name of dirs) {
+        const p = path.join(PROFILE_DIR, name);
+        archive[name] = fs.readdirSync(p).filter(f => f.endsWith('.jpg') || f.endsWith('.png'));
+    }
+    return archive;
+});
+
+ipcMain.handle('read-profile-image', async (event, { name, filename }) => {
+    const p = path.join(PROFILE_DIR, name, filename);
+    if (!fs.existsSync(p)) return null;
+    return fs.readFileSync(p, { encoding: 'base64' });
+});
+
+ipcMain.handle('save-face-image', async (event, { name, base64 }) => {
+    const dir = path.join(PROFILE_DIR, name);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    
+    const filename = `${name}_${Date.now()}.jpg`;
+    const p = path.join(dir, filename);
+    const data = base64.replace(/^data:image\/\w+;base64,/, "");
+    fs.writeFileSync(p, data, { encoding: 'base64' });
+    return { success: true, filename };
+});
+
 ipcMain.handle('save-snapshot', async (event, { base64, label }) => {
     const fn = `alert_${Date.now()}_${label}.jpg`;
     fs.writeFileSync(path.join(INCIDENT_DIR, fn), base64.replace(/^data:image\/\w+;base64,/, ""), 'base64');
     return fn;
-});
-
-ipcMain.handle('save-face-image', async (event, { base64, name, index }) => {
-    const profileDir = path.join(PROFILE_DIR, name);
-    if (!fs.existsSync(profileDir)) fs.mkdirSync(profileDir, { recursive: true });
-    const fileName = `${name}_${index}.jpg`;
-    const filePath = path.join(profileDir, fileName);
-    fs.writeFileSync(filePath, base64.replace(/^data:image\/\w+;base64,/, ""), 'base64');
-    logToWindow(`[FACE-SAVE] Sparat ansikte: ${fileName}`, 'info');
-    return filePath;
 });
 
 ipcMain.handle('save-vehicle-image', async (event, { base64, name }) => {
@@ -170,15 +207,19 @@ ipcMain.handle('save-vehicle-image', async (event, { base64, name }) => {
     return filePath;
 });
 
+ipcMain.on('log-identity', (event, { name, camera }) => {
+    logToWindow(`[IDENTIFIERING] ${name} detekterad vid ${camera}`, 'info');
+});
+
 // --- MQTT BRYGGA FÖR FRIGATE ---
 const mqttClient = mqtt.connect('mqtt://localhost:1883');
+const processedEvents = new Map(); // objId -> true (Nyligen loggad)
 
 mqttClient.on('connect', () => {
     logToWindow("❤️ SYSTEM-LINK: FRIGATE & JARVIS ÄR NU SAMMANKOPPLADE", 'info');
     logToWindow("❤️ STATUS: PULS AKTIV - SYSTEMET ÄR LIVE", 'info');
     mqttClient.subscribe('frigate/events');
     mqttClient.subscribe('frigate/reviews');
-    mqttClient.subscribe('frigate/stats');
 });
 
 mqttClient.on('offline', () => {
@@ -189,18 +230,31 @@ mqttClient.on('message', (topic, message) => {
     if (topic === 'frigate/events' || topic === 'frigate/reviews') {
         try {
             const event = JSON.parse(message.toString());
-            // Hantera både gamla events och nya reviews
             const data = event.after || event; 
-            const type = event.type || (event.severity === 'alert' ? 'new' : 'update');
+            
+            // --- FIX: Säkerställ att 'type' finns på objektet för frontend-filtret ---
+            if (!event.type) {
+                event.type = (event.severity === 'alert' || !event.before) ? 'new' : 'update';
+            }
+            const type = event.type;
+            const objId = data.id;
 
-            if (type === 'new' || (type === 'update' && data.stationary === false)) {
+            // --- SPÄRR MOT SPAMMING ---
+            // Logga i UI endast om det är en ny händelse för att inte fylla skärmen
+            const shouldLog = type === 'new' && !processedEvents.has(objId);
+            
+            if (shouldLog) {
                 const label = data.label || 'rörelse';
                 const cam = data.camera;
                 logToWindow(`[FRIGATE] Detekterat ${label} vid ${cam}`, 'info');
-                
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('frigate-event', event);
-                }
+                processedEvents.set(objId, true);
+                // Rensa cachen efter 10 minuter
+                setTimeout(() => processedEvents.delete(objId), 600000);
+            }
+
+            // Skicka alltid eventet till frontend (för vakt-logiken), men utan att logga texten i UI
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('frigate-event', event);
             }
         } catch (e) {
             console.error("MQTT: Fel vid parsing av Frigate-event:", e);

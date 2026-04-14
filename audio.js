@@ -237,4 +237,37 @@ export class AudioHandler {
         
         return new Blob([view], { type: 'audio/wav' });
     }
+
+    /**
+     * NYTT: Skapar en dedikerad volym-mätare för ett specifikt element (Kamera)
+     */
+    createLiveAnalyser(mediaElement) {
+        if (!mediaElement) return null;
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            const source = ctx.createMediaElementSource(mediaElement);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            analyser.connect(ctx.destination);
+            
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            return {
+                analyser,
+                ctx,
+                getVolume: () => {
+                    analyser.getByteTimeDomainData(dataArray);
+                    let max = 0;
+                    for (let i = 0; i < dataArray.length; i++) {
+                        const v = (dataArray[i] / 128.0) - 1.0;
+                        if (Math.abs(v) > max) max = Math.abs(v);
+                    }
+                    return max;
+                }
+            };
+        } catch (e) {
+            console.warn("[AUDIO] Kunde inte skapa analysator för element:", mediaElement.id);
+            return null;
+        }
+    }
 }

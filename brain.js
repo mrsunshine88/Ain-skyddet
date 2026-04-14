@@ -15,7 +15,11 @@ export class Brain {
                 identity: "Du är JARVIS, en avancerad Övervakningsexpert specialiserad på hemmedeln, kamerateknik och familjens säkerhet. Du är ingen människa, utan ett professionellt säkerhetssystem.", 
                 personality: "Du är kliniskt saklig, tekniskt kunnig och extremt kortfattad. Ditt fokus är 100% på säkerhetsstatus, kameror och att skydda Lukas. Svara aldrig med onödigt småprat.", 
                 incidents: [],
-                vehicleGallery: {} // NYTT: För att hålla reda på referensbilder
+                vehicleGallery: {},
+                // --- NYTT: AVANCERAD SÄKERHETSMATRIS ---
+                spatialMap: { "Infarten": 1, "Garaget": 2, "Ytterdorren": 3 },
+                sightingArchive: {}, // Plate/FaceID -> { count, lastSeen, history }
+                activePaths: {} // TrackerID -> { currentZone, startTime, trajectory }
             },
             events: [], insights: [], lastReflection: "Ingen reflektion än."
         };
@@ -146,6 +150,25 @@ export class Brain {
         this.saveBrain();
     }
 
+    logSighting(id, label, camera) {
+        if (!this.brainData.general.sightingArchive) this.brainData.general.sightingArchive = {};
+        const key = `${label}_${id}`;
+        const archive = this.brainData.general.sightingArchive;
+        
+        if (!archive[key]) {
+            archive[key] = { count: 1, firstSeen: new Date().toISOString(), lastSeen: new Date().toISOString(), history: [] };
+        } else {
+            archive[key].count++;
+            archive[key].lastSeen = new Date().toISOString();
+        }
+        
+        archive[key].history.push({ time: new Date().toISOString(), camera });
+        if (archive[key].history.length > 10) archive[key].history.shift();
+        
+        this.saveBrain();
+        return archive[key].count;
+    }
+
     analyzeRoutines() {
         if (!this.brainData.history || this.brainData.history.length < 5) return;
         
@@ -161,7 +184,6 @@ export class Brain {
         
         for (const [person, times] of Object.entries(arrivals)) {
             if (times.length >= 3) {
-                // Hitta ett genomsnittligt klockslag (väldigt simpel modell för nu)
                 const mins = times.map(t => {
                     const [h, m] = t.split(':').map(Number);
                     return h * 60 + m;
@@ -176,6 +198,21 @@ export class Brain {
                 };
             }
         }
+
+        // --- NYTT: AUTONOM FORDONS-ANALYS ---
+        const archive = this.brainData.general.sightingArchive || {};
+        for (const [key, data] of Object.entries(archive)) {
+            if (key.startsWith("car_") && data.count >= 3) {
+                const plate = key.replace("car_", "");
+                if (!this.brainData.vehicles) this.brainData.vehicles = {};
+                
+                if (!this.brainData.vehicles[plate]) {
+                    console.log(`[BRAIN] Upptäckte lojalitetsmönster för bil ${plate}. Klassificerar som familjebil.`);
+                    this.registerVehicle(plate, { owner: "Familjen (Autonomt identifierad)", make: "Okänd" });
+                }
+            }
+        }
+
         this.saveBrain();
     }
 
@@ -240,11 +277,18 @@ export class Brain {
         } catch (e) { console.error("Fact extraction failed:", e); }
     }
 
-    registerCar(plate, owner) {
-        if (!this.brainData.general.vehicleGallery) this.brainData.general.vehicleGallery = {};
-        this.brainData.general.vehicleGallery[plate] = { owner: owner, hasImage: false };
+    registerVehicle(plate, data = {}) {
+        if (!this.brainData.vehicles) this.brainData.vehicles = {};
+        this.brainData.vehicles[plate] = {
+            owner: data.owner || "Okänd",
+            make: data.make || "Okänd",
+            model: data.model || "Okänd",
+            color: data.color || "Okänd",
+            added: new Date().toLocaleDateString(),
+            hasImage: data.hasImage || false
+        };
         this.saveBrain();
-        console.log(`[BRAIN] Fordon registrerat: ${plate} (${owner}). Väntar på referensbild...`);
+        console.log(`[BRAIN] Fordon registrerat: ${plate} (${data.owner}).`);
     }
 
     async getOllamaResponse(model, messages, streamCallback) {

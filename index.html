@@ -221,9 +221,24 @@
         </div>
     </div>
 
+    <!-- FORDONS-MODAL (ALPR) -->
+    <div id="vehicleModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:1001; align-items:center; justify-content:center;">
+        <div class="modal-content" style="background:#0d1217; padding:30px; border-radius:20px; border:2px solid var(--accent); text-align:center; min-width:300px; box-shadow: 0 0 40px rgba(0, 242, 255, 0.2);">
+            <h2 style="color:var(--accent); margin-top:0; letter-spacing: 2px;">FORDONSBESIKTNING</h2>
+            <img id="vehicleSnap" src="" style="width:100%; border-radius:8px; margin-bottom:15px; border:1px solid var(--accent-dim);">
+            <div style="font-size:10px; color:var(--accent); opacity:0.7; margin-bottom:5px;">REGISTRERINGSNUMMER (LÄS AV FRÅN BILDEN)</div>
+            <input type="text" id="vehiclePlateInput" placeholder="ABC 123" style="width:100%; padding:15px; margin-bottom:15px; background:#000; color:#fff; border:1px solid var(--accent-dim); border-radius:8px; text-align:center; font-size:20px; font-weight:900; letter-spacing:2px; text-transform:uppercase;">
+            <input type="text" id="vehicleOwnerInput" placeholder="Ägare (t.ex. Andreas)..." style="width:100%; padding:15px; margin-bottom:15px; background:#000; color:#fff; border:1px solid var(--accent-dim); border-radius:8px; text-align:center;">
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <button class="btn-outline" onclick="document.getElementById('vehicleModal').style.display='none'" style="border-color:#f43f5e; color:#f43f5e; padding:10px 20px;">AVBRYT</button>
+                <button class="btn-action" id="saveVehicleBtn" style="padding:10px 20px; background:var(--accent); color:#000; font-weight:900; border:none; border-radius:8px; cursor:pointer;">IDENTIFIERA</button>
+            </div>
+        </div>
+    </div>
+
     <div class="main-container">
         <div class="camera-section grid" id="cameraSection">
-            <video id="webcam" autoplay muted playsinline style="display:none;"></video>
+            
             
             <div id="camGrid" class="camera-grid">
                 <div class="cam-slot" style="display:none;">
@@ -232,19 +247,19 @@
                     <div id="idBadgeMaster" class="cam-id-badge">IDENTIFIERAD</div>
                 </div>
                 <div class="cam-slot">
-                    <img id="extCam1" src="http://localhost:5050/api/Ytterdorren" style="width:100%; height:100%; object-fit: cover;">
+                    <img id="extCam1" src="" data-cam="Ytterdorren" style="width:100%; height:100%; object-fit: cover;">
                     <div id="led-cam1" class="status-led"></div>
                     <div class="cam-label">Zone 1 / Ytterdörren</div>
                     <div id="idBadgeZone1" class="cam-id-badge">IDENTIFIERAD</div>
                 </div>
                 <div class="cam-slot">
-                    <img id="extCam2" src="http://localhost:5050/api/Infarten" style="width:100%; height:100%; object-fit: cover;">
+                    <img id="extCam2" src="" data-cam="Infarten" style="width:100%; height:100%; object-fit: cover;">
                     <div id="led-cam2" class="status-led"></div>
                     <div class="cam-label">Zone 2 / Infarten</div>
                     <div id="idBadgeZone2" class="cam-id-badge">IDENTIFIERAD</div>
                 </div>
                 <div class="cam-slot">
-                    <img id="extCam3" src="http://localhost:5050/api/Garaget" style="width:100%; height:100%; object-fit: cover;">
+                    <img id="extCam3" src="" data-cam="Garaget" style="width:100%; height:100%; object-fit: cover;">
                     <div id="led-cam3" class="status-led"></div>
                     <div class="cam-label">Zone 3 / Garaget</div>
                     <div id="idBadgeZone3" class="cam-id-badge">IDENTIFIERAD</div>
@@ -252,10 +267,13 @@
             </div>
 
             <div class="overlay">
-                <div>
-                    <div id="statusText" style="font-size: 10px; opacity: 0.6; margin-bottom: 4px; letter-spacing: 1px;">SENSORDATA: VÄNTAR</div>
-                    <div class="visualizer" id="viz" style="display: flex; align-items: center; gap: 3px; height: 20px;">
-                        <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                <div style="display:flex; gap:10px;">
+                    
+                    <div>
+                        <div id="statusText" style="font-size: 10px; opacity: 0.6; margin-bottom: 4px; letter-spacing: 1px;">SENSORDATA: VÄNTAR</div>
+                        <div class="visualizer" id="viz" style="display: flex; align-items: center; gap: 3px; height: 20px;">
+                            <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                        </div>
                     </div>
                 </div>
                 <div id="userBadge" style="background:var(--accent); color:#000; padding:6px 14px; border-radius:6px; font-weight:900; font-size:11px; display:none; text-transform:uppercase; box-shadow: 0 0 15px var(--accent); align-items:center; gap:8px;">
@@ -309,6 +327,12 @@
                 <h2 style="color:var(--accent); margin:0; font-size:18px; letter-spacing:2px;">JARVIS ACADEMY</h2>
                 <button onclick="window.toggleAcademy()" style="background:none; border:none; color:#fff; cursor:pointer; font-size:20px;">✕</button>
             </div>
+
+            <!-- NYTT: LIVE SPEGEL FÖR TRÄNING -->
+            <div style="width:100%; height:200px; background:#000; border-radius:10px; margin-bottom:20px; border:1px solid var(--accent-dim); overflow:hidden; position:relative;">
+                <video id="academyPreview" autoplay muted playsinline style="width:100%; height:100%; object-fit:cover; transform: scaleX(-1);"></video>
+                <div style="position:absolute; top:10px; right:10px; background:rgba(0,255,136,0.2); color:#00ff88; padding:3px 8px; border-radius:4px; font-size:9px; font-weight:bold; border:1px solid #00ff88;">LIVE SENSOR</div>
+            </div>
             
             <div style="display:flex; flex-direction:column; gap:20px;">
                 <div style="border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:20px;">
@@ -350,15 +374,40 @@
     <script src="supabase.client.js"></script>
     <script type="module" src="app.js"></script>
     <script>
-        window.toggleAcademy = () => {
+        async function checkOllama() {
+            try {
+                const host = (window.location.hostname && window.location.hostname !== 'localhost') ? window.location.hostname : '100.107.211.53';
+                const res = await fetch(`http://${host}:11434/api/tags`);
+                const data = await res.json();
+            } catch (e) { console.error("Ollama ej tillgänglig:", e); }
+        }
+
+        window.toggleAcademy = async () => {
             const overlay = document.getElementById('academyOverlay');
-            overlay.style.display = overlay.style.display === 'none' ? 'flex' : 'none';
+            const video = document.getElementById('academyPreview');
+            const isOpen = overlay.style.display !== 'none';
+
+            if (!isOpen) {
+                overlay.style.display = 'flex';
+                // Starta kameran
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                    video.srcObject = stream;
+                    window.academyStream = stream;
+                } catch (e) { console.error("Kunde inte starta Academy-kameran:", e); }
+            } else {
+                overlay.style.display = 'none';
+                // Stoppa kameran
+                if (window.academyStream) {
+                    window.academyStream.getTracks().forEach(track => track.stop());
+                    window.academyStream = null;
+                }
+            }
         };
 
         window.startFaceTrain = () => {
             const name = document.getElementById('trainName').value;
             if (name) {
-                window.toggleAcademy();
                 window.trainPerson(name);
                 document.getElementById('trainName').value = '';
             }
@@ -374,6 +423,14 @@
                 document.getElementById('regOwner').value = '';
             }
         };
+
+        // --- TAILSCALE DYNAMISK KOPPLING ---
+        window.addEventListener('load', () => {
+            const host = window.location.hostname || '127.0.0.1';
+            document.querySelectorAll('img[data-cam]').forEach(img => {
+                img.src = `http://${host}:5050/api/${img.dataset.cam}`;
+            });
+        });
     </script>
 </body>
 </html>

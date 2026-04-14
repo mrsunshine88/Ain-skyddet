@@ -379,10 +379,10 @@ chatInput.onkeypress = (e) => { if (e.key === 'Enter') askAI(); };
 // --- Connection Heartbeat ---
 setInterval(async () => {
     try {
-        const start = Date.now();
-        await fetch('/mobile.html', { method: 'HEAD' });
-        document.querySelector('.dot').style.background = '#00ff88';
-        document.getElementById('statusText').innerText = 'JARVIS ONLINE';
+        const res = await fetch('/api/health');
+        const data = await res.json();
+        document.querySelector('.dot').style.background = (data.server === 'online' && data.frigate === 'online') ? '#00ff88' : '#ffcc00';
+        document.getElementById('statusText').innerText = (data.server === 'online' && data.frigate === 'online') ? 'JARVIS ONLINE' : 'SYSTEMET VÄNTAR';
     } catch (e) {
         document.querySelector('.dot').style.background = '#f43f5e';
         document.getElementById('statusText').innerText = 'ANSLUTNING BRUTEN';
