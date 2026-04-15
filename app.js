@@ -1,3 +1,13 @@
+/**
+ * APP.JS - Systemets kärna och UI-orkestrering
+ * 
+ * ⚠️ SYSTEM ARKITEKTUR VARNING (RIDDAR-PROTOKOLLET)
+ * JARVIS ska vara BLIND och DÖV i viloläge. 
+ * Frigate äger alla kameror. JARVIS ser aldrig en live-ström i bakgrunden.
+ * Inga loggar om pågående detekteringar får visas i UI eller konsol.
+ * Se SYSTEM_RULES.md för de absoluta reglerna.
+ */
+
 import { Brain } from './brain.js';
 import { Vision } from './vision.js';
 import { AudioHandler } from './audio.js';
@@ -169,7 +179,7 @@ async function init() {
 
     // Starta loopar
     setInterval(updateDigitalContext, 10000);
-    setInterval(window.internalThoughtLoop, 600000);
+    // setInterval(window.internalThoughtLoop, 600000); // SPÄRRAD: Inga mer "tankar" i loggen.
     setInterval(checkDreamState, 60000);
     setInterval(timeCheckLoop, 60000);
     setInterval(accumulateSittingTime, 10000);
@@ -208,11 +218,11 @@ window.checkOllama = async () => {
     }
 }
 
-window.internalThoughtLoop = async () => {
-    if (window.isThinking || !window.isHome) return;
-    const thought = await brain.generateInternalThought({ window: window.currentWindow, user: vision.activeUser });
-    if (thought) console.log(`[TANKAR] ${thought}`);
-};
+// window.internalThoughtLoop = async () => {
+//     if (window.isThinking || !window.isHome) return;
+//     const thought = await brain.generateInternalThought({ window: window.currentWindow, user: vision.activeUser });
+//     if (thought) console.log(`[TANKAR] ${thought}`);
+// };
 
 async function initMedia() {
     try {
@@ -325,100 +335,52 @@ async function syncProfilesToAI() {
 
 syncProfilesToAI();
 
-// --- EVENT-HANTERARE: FRIGATE LOGIK ---
+// --- EVENT-HANTERARE: RIDDAR-PROTOKOLLET (FRIGATE -> JARVIS) ---
 ipcRenderer.on('frigate-event', async (event, data) => {
-    const after = data.after;
-    if (!after || !after.id) return;
-    
-    // --- STRICKT PASSIVITET: Agera endast om Frigate har en bekräftad bild ---
-    if (!after.has_snapshot) return;
+    // Data innehåller: identity, label, camera, id (event_id från review)
+    // VIKTIGT: JARVIS är blind. All identifiering (namn/nummer) kommer färdigdiskad från Frigate.
+    const objId = data.id;
+    const camera = data.camera;
+    const identity = data.identity || "Okänd"; 
+    const label = data.label || "rörelse";
 
-    // Deduplicering
-    if (!window.lastAlerts) window.lastAlerts = {};
-    const alertKey = `${after.camera}_${after.id}_${after.label}`;
-    if (window.lastAlerts[alertKey]) return; 
-    window.lastAlerts[alertKey] = true;
-    setTimeout(() => { delete window.lastAlerts[alertKey]; }, 60000);
-
-    // Rörelse
-    if (!window.lastSequence) window.lastSequence = { camera: '', time: 0 };
-    const now = Date.now();
-    let movementContext = (now - window.lastSequence.time < 45000) ? ` (Rör sig vidare från ${window.lastSequence.camera})` : "";
-    window.lastSequence = { camera: after.camera, time: now };
-
-    if (after.label === 'car' && after.stationary) return;
-    const visionTargets = ["person", "car", "motorcycle", "dog", "cat"];
-    if (!visionTargets.includes(after.label) && after.label !== "speech") return;
+    // Deduplicering vid behov
+    if (!window.activeReviews) window.activeReviews = new Set();
+    if (window.activeReviews.has(objId)) return;
+    window.activeReviews.add(objId);
+    setTimeout(() => window.activeReviews.delete(objId), 300000);
 
     (async () => {
-        // --- FAS 1: HÄMTA BILD OCH IDENTITET ---
-        let knownName = null;
-        let snap = null;
+        // --- FAS 1: ANNONSERING (Omedelbar bekräftelse baserat på Frigates data) ---
+        const initialNotice = `${identity} upptäckt vid ${camera}.`;
+        
+        window.appendMessage('System', `🔔 [BEVAKNING]: ${initialNotice}`);
+        if (window.canSpeakNow()) audio.speak(initialNotice);
 
-        // 1. Försök hitta vem det är (sub_label) 
-        const currentEvent = await vision.getEventData(after.id);
-        if (currentEvent && currentEvent.sub_label && currentEvent.sub_label !== "unknown") {
-            knownName = currentEvent.sub_label;
-        }
-
-        // 2. Hämta bilden (ENBART ETT FÖRSÖK - PASIVEN KRÄVER ATT DEN FINNS)
-        snap = await vision.getSnapshotFromFrigate(after.id, true);
-        if (!snap) snap = await vision.getSnapshotFromFrigate(after.id);
-
-        // --- SPÄRR: Om ingen bild finns trots signal, avbryt allt (Hålla käft!) ---
+        // --- FAS 2: ANALYS (Travis ser bilden efter att han blivit väckt) ---
+        // Hämta en ren 1080p snapshot för Travis analys
+        const snap = await vision.getSnapshotFromFrigate(objId, false);
         if (!snap) return;
 
-        // --- FAS 2: ANNONSERING (Nu när vi vet att det är på riktigt) ---
-        
-        // Varning 1: Identitet (Enbart det som Frigate serverar)
-        if (knownName && knownName !== "unknown") {
-            ipcRenderer.send('log-identity', { name: knownName.toUpperCase(), camera: after.camera });
-            window.appendMessage('System', `👤 Identifierad: ${knownName} vid ${after.camera}`);
-            if (window.canSpeakNow()) audio.speak(`${knownName} vid ${after.camera}.`);
-        } else {
-            const labelMap = { "person": "Person", "car": "Bil", "motorcycle": "Motorcykel", "dog": "Hund", "cat": "Katt" };
-            const labelSwe = labelMap[after.label] || after.label;
-            window.appendMessage('System', `⚠️ Identifierad: Okänd ${labelSwe} vid ${after.camera}`);
-            if (window.canSpeakNow()) audio.speak(`Okänd ${labelSwe} vid ${after.camera}.`);
-        }
-
-        // Varning 2: AI-Beskrivning
-        if (visionTargets.includes(after.label)) {
-            const analysis = await vision.analyzeIntruder(snap, after.label, knownName, after.camera, movementContext);
+        const visionTargets = ["person", "car", "motorcycle", "dog", "cat"];
+        if (visionTargets.includes(label)) {
+            // Travis beskriver vad han ser på bilden (inget gissande av namn/regnr här)
+            const analysis = await vision.analyzeIntruder(snap, label, identity, camera);
+            
+            // --- FAS 3: RAPPORT (Den fullständiga beskrivningen) ---
             if (analysis && analysis.description) {
-                const timestamp = new Date().toLocaleString('sv-SE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-                const header = `[BEVAKNING]: ${after.camera} (${timestamp})`;
-                const msgDiv = window.appendMessage('AI', `🚨 ${header}\n${analysis.description}`, "", after.camera);
+                const timestamp = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+                const header = `[RAPPORT]: ${camera} kl ${timestamp}`;
+                
+                window.appendImage(snap, camera);
+                window.appendMessage('AI', `🚨 ${header}\n${analysis.description}`, "", camera);
+                
                 if (window.canSpeakNow()) audio.speak(analysis.description);
-                window.sendTelegramPhoto(`🚨 ${header}\n${analysis.description}`, snap);
-
-                const btn = document.createElement('button');
-                btn.className = 'btn-outline'; btn.style.fontSize = '9px';
-                if (after.label === 'person') {
-                    btn.innerText = '👤 NAMNGE';
-                    btn.onclick = () => window.openIdentifyModal(after.id, after.label, snap);
-                } else {
-                    btn.innerText = '🚗 NAMNGE';
-                    btn.onclick = () => window.openVehicleModal("", snap);
-                }
-                msgDiv.appendChild(btn);
-
+                
                 if (window.systemMode !== 'hemma') {
+                    window.sendTelegramPhoto(`🚨 ${header}\n${analysis.description}`, snap);
                     if (!window.eventBuffer) window.eventBuffer = [];
-                    window.eventBuffer.push(`${new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })}: ${analysis.description}`);
-                }
-            }
-        }
-
-        // Röstdetektering
-        if (after.label === "speech") {
-            const camIdx = after.camera === "Ytterdorren" ? 0 : (after.camera === "Garaget" ? 2 : 1);
-            const audioElem = ui.extAuds[camIdx];
-            if (audioElem) {
-                const text = await audio.transcribeFromElement(audioElem, 7000);
-                if (text && text.length > 2) {
-                    window.appendMessage('AI', `📢 [TJUVLYSSNING]: "${text}"`);
-                    audio.speak(`De sa: ${text}`);
+                    window.eventBuffer.push(`${timestamp}: ${analysis.description}`);
                 }
             }
         }

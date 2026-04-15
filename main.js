@@ -12,6 +12,12 @@ process.on('uncaughtException', (error) => {
     console.error('⚠️ Obehandlat fel fångat:', error);
 });
 
+/* ⚠️ SYSTEM ARKITEKTUR VARNING (RIDDAR-PROTOKOLLET)
+   Frigate äger ögonen (kamerorna). JARVIS/Travis ska vara BLIND och DÖV i viloläge.
+   Lyssna ALDRIG på 'frigate/events' - det skapar brus och falska signaler.
+   Inga modifieringar av denna arkitektur utan föregående plan och godkännande.
+   Se SYSTEM_RULES.md för mer information. */
+
 
 const INCIDENT_DIR = path.join(__dirname, 'incidents');
 const PROFILE_DIR = path.join(__dirname, 'profiles');
@@ -208,28 +214,26 @@ ipcMain.handle('save-vehicle-image', async (event, { base64, name }) => {
 });
 
 ipcMain.handle('update-double-take-alias', async (event, { name, match }) => {
-    const yamlPath = 'c:/Users/perss/Desktop/Frigate/config/double-take.yml';
+    const yamlPath = 'c:/Users/perss/Desktop/Frigate/config.yml';
     try {
-        if (!fs.existsSync(yamlPath)) return { success: false, error: 'Fil saknas' };
+        if (!fs.existsSync(yamlPath)) return { success: false, error: 'Double-Take config saknas' };
         
+        // --- VIKTIGT: För bilar använder vi nu JARVIS egna 'brain.json' som master ---
+        // Men för ansikten (Faces) kan vi fortfarande lägga till alias i Double-Take om det behövs
         let content = fs.readFileSync(yamlPath, 'utf8');
         const aliasEntry = `  - name: ${name}\n    match: ${match}`;
         
-        // Kontrollera om aliaset redan finns i textform
         if (content.includes(`match: ${match}`)) {
-            return { success: true, message: 'Redan registrerad' };
+            return { success: true, message: 'Redan registrerad i Double-Take' };
         }
 
+        // Lägg till alias i Double-Take config om det finns en alias-sektion
         if (content.includes('aliases:')) {
-            // Lägg till under befintlig aliases-tagg
             content = content.replace('aliases:', `aliases:\n${aliasEntry}`);
-        } else {
-            // Skapa aliases-tagg längst ned
-            content += `\naliases:\n${aliasEntry}\n`;
+            fs.writeFileSync(yamlPath, content, 'utf8');
         }
 
-        fs.writeFileSync(yamlPath, content, 'utf8');
-        logToWindow(`[BRIDGE] Uppdaterat Frigates identifieringslista: ${name} (${match})`, 'info');
+        logToWindow(`[BRIDGE] System-synk slutförd för ${name} (${match})`, 'info');
         return { success: true };
     } catch (e) {
         console.error("Brygga-fel:", e);
@@ -239,48 +243,82 @@ ipcMain.handle('update-double-take-alias', async (event, { name, match }) => {
 
 // --- MQTT BRYGGA FÖR FRIGATE ---
 const mqttClient = mqtt.connect('mqtt://localhost:1883');
-const processedEvents = new Map(); // objId -> true (Nyligen loggad)
+const processedEvents = new Map();
+
+// --- HJÄLPFUNKTION: IDENTITETS-TOLK (HITTAS I EN FIL) ---
+function resolveIdentity(rawId) {
+    if (!rawId || rawId === "unknown" || rawId === "Okänd") return "Okänd";
+    
+    try {
+        const brainPath = path.join(__dirname, 'brain.json');
+        if (fs.existsSync(brainPath)) {
+            const brainData = JSON.parse(fs.readFileSync(brainPath, 'utf8'));
+            const cleanId = rawId.toUpperCase().replace(/\s/g, '');
+            
+            // Kolla om det är en känd bil i registret
+            if (brainData.vehicles) {
+                for (const plate in brainData.vehicles) {
+                    if (plate.toUpperCase().replace(/\s/g, '') === cleanId) {
+                        const owner = brainData.vehicles[plate].owner || "Okänd";
+                        return `${owner}s bil`;
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Kunde inte slå upp identitet i brain.json:", e);
+    }
+    
+    return rawId; // Returera originalet om ingen match hittas
+}
 
 mqttClient.on('connect', () => {
-    logToWindow("❤️ SYSTEM-LINK: FRIGATE & JARVIS ÄR NU SAMMANKOPPLADE", 'info');
-    logToWindow("❤️ STATUS: PULS AKTIV - SYSTEMET ÄR LIVE", 'info');
-    mqttClient.subscribe('frigate/events');
+    logToWindow("❤️ SYSTEM-LINK: SAMMANKOPPLING AKTIV", 'info');
+    logToWindow("❤️ RIDDAR-PROTOKOLLET: JARVIS ÄR NU GENUINT BLIND", 'info');
     mqttClient.subscribe('frigate/reviews');
 });
 
 mqttClient.on('offline', () => {
-    logToWindow("📡 MQTT-STATUS: Tappat kontakten med Frigate. Försöker återansluta lokalt...", 'warn');
+    logToWindow("📡 MQTT-STATUS: Offline. Försöker återansluta...", 'warn');
 });
 
 mqttClient.on('message', (topic, message) => {
-    if (topic === 'frigate/events' || topic === 'frigate/reviews') {
+    if (topic === 'frigate/reviews') {
         try {
-            const event = JSON.parse(message.toString());
-            const data = event.after || event; 
-            
-            // --- STRICKT FILTER: Agera endast om händelsen har en bekräftad bild ---
-            if (!data.has_snapshot) return;
-
+            const review = JSON.parse(message.toString());
+            const data = review.after || review; 
             const objId = data.id;
-
-            // --- SPÄRR MOT SPAMMING & LJUDLÖS LOGIK ---
-            // Vi loggar och skickar endast om det är första gången vi ser bilden för detta ID
+            
             if (!processedEvents.has(objId)) {
-                const label = data.label || 'rörelse';
+                // --- RIKTIG FIX: Hämta det faktiska Objekt-ID:t för att kunna hämta bilden ---
+                // review.id är ett Review-ID, men snapshot-API:et kräver ett Object-ID (detections)
+                const realObjectId = data.data?.detections?.[0] || objId;
+                
+                const label = data.data?.objects?.[0] || 'rörelse';
+                const subLabel = data.data?.sub_labels?.[0]; // Namn från ansikte/regplåt
                 const cam = data.camera;
                 
-                logToWindow(`[FRIGATE] Jobb startat: ${label} identifierad vid ${cam}`, 'info');
+                // --- RIDDAR-PROTOKOLLET: Översätt rå-data till rätt info innan JARVIS hör det ---
+                const identity = resolveIdentity(subLabel || "Okänd");
+                
+                logToWindow(`[FRIGATE] Bekräftad händelse: ${identity} (${label}) vid ${cam} (Bild-ID: ${realObjectId})`, 'info');
                 
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('frigate-event', event);
+                    // Skicka till JARVIS/Travis för analys
+                    mainWindow.webContents.send('frigate-event', {
+                        id: realObjectId, // Nu skickar vi det ID som faktiskt har en bildfil
+                        camera: cam,
+                        identity: identity,
+                        label: label,
+                        raw: review 
+                    });
                 }
 
                 processedEvents.set(objId, true);
-                // Rensa cachen efter 10 minuter
-                setTimeout(() => processedEvents.delete(objId), 600000);
+                setTimeout(() => processedEvents.delete(objId), 300000); 
             }
         } catch (e) {
-            console.error("MQTT: Fel vid parsing av Frigate-event:", e);
+            console.error("MQTT: Fel vid parsing av Frigate-review:", e);
         }
     }
 });

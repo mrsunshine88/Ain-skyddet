@@ -1,5 +1,11 @@
 /**
  * VISION.JS - Hanterar kamera, ansiktsigenkänning och humöranalys
+ * 
+ * ⚠️ SYSTEM ARKITEKTUR VARNING (RIDDAR-PROTOKOLLET)
+ * JARVIS/Travis ska vara BLIND i viloläge. 
+ * Denna modul får aldrig användas för att tjuvlyssna på live-strömmar i bakgrunden.
+ * Travis får endast se bilder som skickas explicit från Frigate efter en bekräftad händelse.
+ * Inga modifieringar av denna arkitektur utan föregående plan och godkännande.
  */
 
 export class Vision {
@@ -92,60 +98,8 @@ export class Vision {
 
 
 
-    async recognizeFace(sourceElement = null) {
-        const source = sourceElement || this.video;
-        if (source instanceof HTMLVideoElement && source.readyState !== 4) return [];
+    // recognizeFace raderad enligt RIDDAR-PROTOKOLLET. JARVIS får inte identifiera själv.
 
-        const off = document.createElement('canvas');
-        off.width = 640;
-        off.height = 480;
-        const ctx = off.getContext('2d');
-        ctx.drawImage(source, 0, 0, 640, 480);
-
-        return new Promise((resolve) => {
-            off.toBlob(async (blob) => {
-                if (!blob) { resolve([]); return; }
-                const fd = new FormData();
-                fd.append('image', blob, 'scan.jpg');
-                fd.append('min_confidence', '0.60');
-
-                try {
-                    const res = await fetch('http://127.0.0.1:32168/v1/vision/face/recognize', {
-                        method: 'POST',
-                        body: fd
-                    });
-                    const data = await res.json();
-                    let detectedUsers = [];
-
-                    if (data.success && data.predictions?.length > 0) {
-                        detectedUsers = data.predictions.map(p => p.userid || p.label || "Okänd");
-                    }
-
-                    const primaryName = detectedUsers[0] || "Okänd";
-                    const now = Date.now();
-
-                    if (primaryName !== "Okänd") {
-                        this.lastSeenTime = now;
-                        if (primaryName !== this.activeUser) {
-                            if (this.activeUser === "Andreas") this.brain.logEvent("System", "Andreas lämnade.");
-                            else this.brain.logEvent(primaryName, "dök upp.");
-                        }
-                        this.activeUser = primaryName;
-                    } else {
-                        if (now - this.lastSeenTime > this.presenceBuffer) {
-                            this.activeUser = "Okänd";
-                        }
-                    }
-
-                    this.lastObservedUser = primaryName;
-                    resolve(detectedUsers);
-                } catch (e) {
-                    console.error("Ansiktsigenkänning misslyckades:", e);
-                    resolve([]);
-                }
-            }, 'image/jpeg');
-        });
-    }
 
     async registerFace(imageSource, name) {
         // Om imageSource är en base64-sträng, använd den. Annars ta en snapshot från videon.
@@ -251,46 +205,11 @@ export class Vision {
         return successCount >= 3;
     }
 
-    async recognizePlateFromBase64(base64) {
-        if (!base64) return null;
-        try {
-            const rawBase64 = base64.replace(/^data:image\/jpeg;base64,/, "");
-            const res = await fetch('http://127.0.0.1:32168/v1/vision/alpr', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: rawBase64 })
-            });
-            const data = await res.json();
-            if (data.success && data.predictions && data.predictions.length > 0) {
-                return data.predictions[0].plate || null;
-            }
-        } catch (e) {
-            console.error("[VISION] ALPR misslyckades:", e);
-        }
-        return null;
-    }
+    // recognizePlate raderad enligt RIDDAR-PROTOKOLLET.
 
-    async recognizeFaceFromBase64(base64) {
-        if (!base64) return null;
-        try {
-            const rawBase64 = base64.replace(/^data:image\/jpeg;base64,/, "");
-            const res = await fetch('http://127.0.0.1:32168/v1/vision/face/recognize', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: rawBase64, min_confidence: 0.40 }) // Sänkt tröskel till 40% för bättre träffsäkerhet i svåra vinklar
-            });
-            const data = await res.json();
-            if (data.success && data.predictions && data.predictions.length > 0) {
-                const best = data.predictions[0];
-                // BREDD-SÖK: Kolla alla fält där namnet kan gömma sig
-                const detectedName = best.userid || best.label || best.person;
-                if (detectedName && detectedName !== "unknown") return detectedName;
-            }
-        } catch (e) {
-            console.error("[VISION] Ansiktsigenkänning misslyckades:", e);
-        }
-        return null;
-    }
+
+    // recognizeFaceFromBase64 raderad enligt RIDDAR-PROTOKOLLET.
+
 
 
 
@@ -356,37 +275,8 @@ export class Vision {
         });
     }
 
-    async detectPlate(imgSource) {
-        let blob;
-        if (typeof imgSource === 'string' && imgSource.startsWith('data:')) {
-            const rawBase64 = imgSource.split(',')[1];
-            const binary = atob(rawBase64);
-            const array = [];
-            for (let i = 0; i < binary.length; i++) array.push(binary.charCodeAt(i));
-            blob = new Blob([new Uint8Array(array)], { type: 'image/jpeg' });
-        } else if (imgSource) {
-            const off = document.createElement('canvas');
-            const w = imgSource.videoWidth || imgSource.naturalWidth || 1280;
-            const h = imgSource.videoHeight || imgSource.naturalHeight || 720;
-            off.width = w; off.height = h;
-            off.getContext('2d').drawImage(imgSource, 0, 0, w, h);
-            blob = await new Promise(r => off.toBlob(r, 'image/jpeg', 0.95));
-        }
+    // detectPlate raderad enligt RIDDAR-PROTOKOLLET.
 
-        if (!blob) return null;
-
-        const fd = new FormData();
-        fd.append('image', blob, 'plate.jpg');
-
-        try {
-            const res = await fetch('http://127.0.0.1:32168/v1/vision/alpr', { method: 'POST', body: fd });
-            const data = await res.json();
-            if (data.success && data.predictions?.length > 0) {
-                return { plate: data.predictions[0].plate, confidence: data.predictions[0].confidence };
-            }
-        } catch (e) { console.error("ALPR fail:", e); }
-        return null;
-    }
 
     // --- NYTT: Ta en ögonblicksbild för notiser ---
     async captureSnapshot(sourceElement = null) {
@@ -492,9 +382,9 @@ export class Vision {
                 reader.onloadend = () => resolve(reader.result);
                 reader.readAsDataURL(blob);
             });
-        } catch (e) { 
+        } catch (e) {
             console.error(`[VISION-DIAG] Kunde inte hämta live-bild för ${cameraName}:`, e);
-            return null; 
+            return null;
         }
     }
 
@@ -539,24 +429,11 @@ export class Vision {
             const labelMap = { "person": "person", "car": "bil", "motorcycle": "motorcykel", "dog": "hund", "cat": "katt" };
             const labelSwe = labelMap[label] || label;
 
-            const promptPerson = `Beskriv personen kortfattat.
-IDENTITET: ${identity || 'Okänd'}
-Format: [Namn], [Kläder], [Gör något].
-Regel: Max 10 ord. Ta namnet från IDENTITET. Om ansiktet är vitt, skriv "Ansikte: Vitt".
-Svara bara med fakta.`;
+            const promptPerson = `Beskriv personen snabbt.\nFORMAT: [Okänd/Namn], [Kläder], [Gör nåt].\nMAX 20 ORD. Inget flum.`;
+            const promptVehicle = `Beskriv bilen snabbt.\nFORMAT: [Färg], [Typ/Modell], [Status].\nMAX 8 ORD. Inga gissningar. Om regnummer syns, skriv Plate: [Nummer].`;
 
-            const promptVehicle = `Beskriv bilen kortfattat.
-IDENTITET: ${identity || 'Okänd'}
-Format: [Ägare/Okänd], [Färg], [Typ/Modell], [Status].
-Regel: Max 10 ord. Vid nattbild, skriv bara "Ljus" eller "Mörk".
-Svara bara med fakta.`;
-
-
-
-            let finalPrompt = promptVehicle; // Standard (fallback)
-            if (label === 'person') {
-                finalPrompt = promptPerson;
-            }
+            let finalPrompt = promptVehicle;
+            if (label === 'person') finalPrompt = promptPerson;
 
             // Robust bildrensning som hanterar alla format (jpeg, png, webp etc)
             const rawBase64 = snap.replace(/^data:image\/\w+;base64,/, "");
@@ -570,13 +447,13 @@ Svara bara med fakta.`;
                     messages: [
                         { role: 'user', content: finalPrompt, images: [rawBase64] }
                     ],
-                    options: { 
-                        num_predict: 80, 
-                        temperature: 0.1, 
-                        repeat_penalty: 1.2, 
+                    options: {
+                        num_predict: 80,
+                        temperature: 0.1,
+                        repeat_penalty: 1.2,
                         presence_penalty: 0.5,
                         repeat_last_n: 64,
-                        top_p: 0.1 
+                        top_p: 0.1
                     },
                     stream: false
                 })
@@ -590,13 +467,13 @@ Svara bara med fakta.`;
                         messages: [
                             { role: 'user', content: finalPrompt, images: [rawBase64] }
                         ],
-                        options: { 
-                            num_predict: 80, 
-                            temperature: 0.1, 
-                            repeat_penalty: 1.6, 
+                        options: {
+                            num_predict: 80,
+                            temperature: 0.1,
+                            repeat_penalty: 1.6,
                             presence_penalty: 0.5,
                             repeat_last_n: 64,
-                            top_p: 0.4 
+                            top_p: 0.4
                         },
                         stream: false
                     })

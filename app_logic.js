@@ -1,5 +1,9 @@
 /**
  * APP_LOGIC.JS - Hanterar AI, lägen och systembeslut
+ * 
+ * ⚠️ SYSTEM ARKITEKTUR VARNING (RIDDAR-PROTOKOLLET)
+ * Ingen AI får ändra arkitekturen utan föregående plan och godkännande.
+ * Travis (Vision) får endast aktiveras reaktivt via bekräftade Review-paket.
  */
 
 export function initLogic(ui, brain, vision, audio) {
@@ -324,29 +328,35 @@ ALLMÄN REGEL: Ignorera skuggor på väggar/bakgrund. Beskriv INTE inredning. Sv
     window.registerCar = (plate, owner) => {
         if (!plate || !owner) return;
         const cleanPlate = plate.toUpperCase().replace(/\s/g, '');
-        if (!brain.brainData.general.familyCars) brain.brainData.general.familyCars = {};
-        brain.brainData.general.familyCars[cleanPlate] = owner;
         
-        // Spara även som en faktum för AI:n
+        // Se till att 'vehicles' existerar i brain.json på rätt nivå
+        if (!brain.brainData.vehicles) brain.brainData.vehicles = {};
+        
+        // Spara i det format main.js förväntar sig
+        brain.brainData.vehicles[cleanPlate] = {
+            owner: owner,
+            added: new Date().toISOString().split('T')[0]
+        };
+        
+        // Spara även som ett faktum för AI:n för konversation
+        if (!brain.brainData.users["Andreas"]) brain.brainData.users["Andreas"] = { facts: [] };
         if (!brain.brainData.users["Andreas"].facts.includes(`Bilen med regnummer ${cleanPlate} tillhör ${owner}.`)) {
             brain.brainData.users["Andreas"].facts.push(`Bilen med regnummer ${cleanPlate} tillhör ${owner}.`);
         }
         
         brain.saveBrain();
         
-        // --- BRIDGE: Uppdatera Frigates konfiguration ---
-        if (window.electronAPI && window.electronAPI.updateDoubleTakeAlias) {
-            window.electronAPI.updateDoubleTakeAlias({ name: owner, match: cleanPlate }).then(res => {
+        // --- BRIDGE: Uppdatera Frigates/Double-Takes identifieringslista vid behov ---
+        if (window.ipcRenderer) {
+            window.ipcRenderer.invoke('update-double-take-alias', { name: owner, match: cleanPlate }).then(res => {
                 if (res.success) {
-                    window.appendMessage('System', `📡 SYNC: Frigates identifiering uppdaterad för ${owner}.`);
-                } else {
-                    console.warn("Kunde inte synka till Frigate:", res.error);
+                    window.appendMessage('System', `📡 SYNC: Systemets identifiering uppdaterad för ${owner}.`);
                 }
             });
         }
 
-        window.appendMessage('AI', `Fordonet ${cleanPlate} är nu registrerat på ${owner}. Jag kommer aldrig glömma bort den.`);
-        audio.speak(`Fordonet registrerat. Jag håller utkik efter ${owner}s bil.`);
+        window.appendMessage('AI', `Fordonet ${cleanPlate} är nu registrerat på ${owner}. Identitets-bryggan är uppdaterad.`);
+        if (window.canSpeakNow()) audio.speak(`Fordonet registrerat. Jag känner nu igen ${owner}s bil.`);
     };
 
     window.syncCloudMemory = async () => {
