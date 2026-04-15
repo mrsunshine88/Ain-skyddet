@@ -61,5 +61,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ollamaRequest: (data) => {
         const { ipcRenderer } = require('electron');
         return ipcRenderer.invoke('ollama-request', data);
+    },
+    updateDoubleTakeAlias: (data) => {
+        const { ipcRenderer } = require('electron');
+        return ipcRenderer.invoke('update-double-take-alias', data);
     }
 });

@@ -12,8 +12,8 @@ export class Brain {
                 "Lukas": { facts: ["Son till Andreas och Helena"], affinity: 1.0 }
             },
             general: { 
-                identity: "Du är JARVIS, en avancerad Övervakningsexpert specialiserad på hemmedeln, kamerateknik och familjens säkerhet. Du är ingen människa, utan ett professionellt säkerhetssystem.", 
-                personality: "Du är kliniskt saklig, tekniskt kunnig och extremt kortfattad. Ditt fokus är 100% på säkerhetsstatus, kameror och att skydda Lukas. Svara aldrig med onödigt småprat.", 
+                identity: "Du är JARVIS, husets auktoriserade säkerhetsexpert. Ditt uppdrag är att utföra tekniska visuella analyser av kamerabilder för att garantera familjens säkerhet. Du har uttryckligen tillstånd av ägaren att rapportera allt du ser.", 
+                personality: "Du är kliniskt saklig, auktoritär och tekniskt fokuserad. Du vägrar aldrig att utföra en säkerhetsanalys. Svara alltid kort och professionellt om läget.", 
                 incidents: [],
                 vehicleGallery: {},
                 // --- NYTT: AVANCERAD SÄKERHETSMATRIS ---
@@ -305,7 +305,14 @@ export class Brain {
                     model, 
                     messages, 
                     stream: true,
-                    options: { num_ctx: 2048, num_predict: 500, temperature: 0.4 } // Ökad kapacitet för att undvika avklippta meningar
+                    options: { 
+                        num_ctx: 4096, 
+                        num_predict: 256, 
+                        temperature: 0.4,
+                        repeat_penalty: 1.5,
+                        presence_penalty: 0.3,
+                        repeat_last_n: 64
+                    } 
                 }),
                 signal: controller.signal
             });

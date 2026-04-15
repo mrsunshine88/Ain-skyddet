@@ -207,8 +207,34 @@ ipcMain.handle('save-vehicle-image', async (event, { base64, name }) => {
     return filePath;
 });
 
-ipcMain.on('log-identity', (event, { name, camera }) => {
-    logToWindow(`[IDENTIFIERING] ${name} detekterad vid ${camera}`, 'info');
+ipcMain.handle('update-double-take-alias', async (event, { name, match }) => {
+    const yamlPath = 'c:/Users/perss/Desktop/Frigate/config/double-take.yml';
+    try {
+        if (!fs.existsSync(yamlPath)) return { success: false, error: 'Fil saknas' };
+        
+        let content = fs.readFileSync(yamlPath, 'utf8');
+        const aliasEntry = `  - name: ${name}\n    match: ${match}`;
+        
+        // Kontrollera om aliaset redan finns i textform
+        if (content.includes(`match: ${match}`)) {
+            return { success: true, message: 'Redan registrerad' };
+        }
+
+        if (content.includes('aliases:')) {
+            // Lägg till under befintlig aliases-tagg
+            content = content.replace('aliases:', `aliases:\n${aliasEntry}`);
+        } else {
+            // Skapa aliases-tagg längst ned
+            content += `\naliases:\n${aliasEntry}\n`;
+        }
+
+        fs.writeFileSync(yamlPath, content, 'utf8');
+        logToWindow(`[BRIDGE] Uppdaterat Frigates identifieringslista: ${name} (${match})`, 'info');
+        return { success: true };
+    } catch (e) {
+        console.error("Brygga-fel:", e);
+        return { success: false, error: e.message };
+    }
 });
 
 // --- MQTT BRYGGA FÖR FRIGATE ---
@@ -232,29 +258,26 @@ mqttClient.on('message', (topic, message) => {
             const event = JSON.parse(message.toString());
             const data = event.after || event; 
             
-            // --- FIX: Säkerställ att 'type' finns på objektet för frontend-filtret ---
-            if (!event.type) {
-                event.type = (event.severity === 'alert' || !event.before) ? 'new' : 'update';
-            }
-            const type = event.type;
+            // --- STRICKT FILTER: Agera endast om händelsen har en bekräftad bild ---
+            if (!data.has_snapshot) return;
+
             const objId = data.id;
 
-            // --- SPÄRR MOT SPAMMING ---
-            // Logga i UI endast om det är en ny händelse för att inte fylla skärmen
-            const shouldLog = type === 'new' && !processedEvents.has(objId);
-            
-            if (shouldLog) {
+            // --- SPÄRR MOT SPAMMING & LJUDLÖS LOGIK ---
+            // Vi loggar och skickar endast om det är första gången vi ser bilden för detta ID
+            if (!processedEvents.has(objId)) {
                 const label = data.label || 'rörelse';
                 const cam = data.camera;
-                logToWindow(`[FRIGATE] Detekterat ${label} vid ${cam}`, 'info');
+                
+                logToWindow(`[FRIGATE] Jobb startat: ${label} identifierad vid ${cam}`, 'info');
+                
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('frigate-event', event);
+                }
+
                 processedEvents.set(objId, true);
                 // Rensa cachen efter 10 minuter
                 setTimeout(() => processedEvents.delete(objId), 600000);
-            }
-
-            // Skicka alltid eventet till frontend (för vakt-logiken), men utan att logga texten i UI
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('frigate-event', event);
             }
         } catch (e) {
             console.error("MQTT: Fel vid parsing av Frigate-event:", e);

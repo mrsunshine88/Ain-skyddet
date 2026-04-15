@@ -237,7 +237,36 @@ window.appendMessage = (role, text, source = "", targetCam = null) => {
         div.title = `Klicka för att se ${targetCam}`;
         div.onclick = () => window.focusCamera(targetCam);
     }
-    div.innerText = (role === 'User' && source === 'röst' ? "🎙️ " : "") + text;
+    const prefix = (role === 'User' && source === 'röst' ? "🎙️ " : "");
+    div.innerText = prefix + text;
+    ui.chatMessages.appendChild(div);
+    ui.chatMessages.scrollTop = ui.chatMessages.scrollHeight;
+    return div;
+};
+
+window.appendImage = (base64, camName = "Kamera") => {
+    const div = document.createElement('div');
+    div.className = `msg msg-ai`;
+    div.style.padding = "5px";
+    div.style.background = "var(--accent-dim)";
+    div.style.border = "1px solid var(--accent)";
+    
+    const img = document.createElement('img');
+    img.src = base64;
+    img.style.width = "100%";
+    img.style.borderRadius = "8px";
+    img.style.display = "block";
+    
+    const label = document.createElement('div');
+    label.innerText = `📸 SNAPSHOT: ${camName.toUpperCase()} [${new Date().toLocaleTimeString()}]`;
+    label.style.fontSize = "9px";
+    label.style.marginTop = "5px";
+    label.style.textAlign = "center";
+    label.style.fontWeight = "900";
+    label.style.color = "var(--accent)";
+
+    div.appendChild(img);
+    div.appendChild(label);
     ui.chatMessages.appendChild(div);
     ui.chatMessages.scrollTop = ui.chatMessages.scrollHeight;
     return div;
@@ -300,6 +329,9 @@ syncProfilesToAI();
 ipcRenderer.on('frigate-event', async (event, data) => {
     const after = data.after;
     if (!after || !after.id) return;
+    
+    // --- STRICKT PASSIVITET: Agera endast om Frigate har en bekräftad bild ---
+    if (!after.has_snapshot) return;
 
     // Deduplicering
     if (!window.lastAlerts) window.lastAlerts = {};
@@ -319,39 +351,46 @@ ipcRenderer.on('frigate-event', async (event, data) => {
     if (!visionTargets.includes(after.label) && after.label !== "speech") return;
 
     (async () => {
-        // --- FAS 1: VÄNTA PÅ FAKTA (Upstream ID) ---
+        // --- FAS 1: HÄMTA BILD OCH IDENTITET ---
         let knownName = null;
-        for (let i = 0; i < 5; i++) {
-            const currentEvent = await vision.checkActiveDetections(after.camera);
-            if (currentEvent && currentEvent.sub_label) {
-                knownName = currentEvent.sub_label;
-                break;
-            }
-            await new Promise(r => setTimeout(r, 2000));
+        let snap = null;
+
+        // 1. Försök hitta vem det är (sub_label) 
+        const currentEvent = await vision.getEventData(after.id);
+        if (currentEvent && currentEvent.sub_label && currentEvent.sub_label !== "unknown") {
+            knownName = currentEvent.sub_label;
         }
 
-        // DIREKTRAPPORT
-        if (knownName && knownName !== "unknown") {
-            ipcRenderer.send('log-identity', { name: knownName.toUpperCase(), camera: after.camera });
-            window.appendMessage('System', `👤 Identifierad: ${knownName}`);
-            if (window.canSpeakNow()) audio.speak(`${knownName} vid ${after.camera}.`);
-        } else if (after.label === 'person') {
-            window.appendMessage('System', `👤 Identifierad: Okänd`);
-            if (window.canSpeakNow()) audio.speak(`Okänd person vid ${after.camera}.`);
-        }
-
-        // --- FAS 2: 1080p DJUPANALYS ---
-        let snap = await vision.getSnapshotFromFrigate(after.id, true);
+        // 2. Hämta bilden (ENBART ETT FÖRSÖK - PASIVEN KRÄVER ATT DEN FINNS)
+        snap = await vision.getSnapshotFromFrigate(after.id, true);
         if (!snap) snap = await vision.getSnapshotFromFrigate(after.id);
+
+        // --- SPÄRR: Om ingen bild finns trots signal, avbryt allt (Hålla käft!) ---
         if (!snap) return;
 
+        // --- FAS 2: ANNONSERING (Nu när vi vet att det är på riktigt) ---
+        
+        // Varning 1: Identitet (Enbart det som Frigate serverar)
+        if (knownName && knownName !== "unknown") {
+            ipcRenderer.send('log-identity', { name: knownName.toUpperCase(), camera: after.camera });
+            window.appendMessage('System', `👤 Identifierad: ${knownName} vid ${after.camera}`);
+            if (window.canSpeakNow()) audio.speak(`${knownName} vid ${after.camera}.`);
+        } else {
+            const labelMap = { "person": "Person", "car": "Bil", "motorcycle": "Motorcykel", "dog": "Hund", "cat": "Katt" };
+            const labelSwe = labelMap[after.label] || after.label;
+            window.appendMessage('System', `⚠️ Identifierad: Okänd ${labelSwe} vid ${after.camera}`);
+            if (window.canSpeakNow()) audio.speak(`Okänd ${labelSwe} vid ${after.camera}.`);
+        }
+
+        // Varning 2: AI-Beskrivning
         if (visionTargets.includes(after.label)) {
             const analysis = await vision.analyzeIntruder(snap, after.label, knownName, after.camera, movementContext);
             if (analysis && analysis.description) {
-                const header = `[BEVAKNING]: ${after.camera}`;
+                const timestamp = new Date().toLocaleString('sv-SE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                const header = `[BEVAKNING]: ${after.camera} (${timestamp})`;
                 const msgDiv = window.appendMessage('AI', `🚨 ${header}\n${analysis.description}`, "", after.camera);
                 if (window.canSpeakNow()) audio.speak(analysis.description);
-                window.sendTelegramPhoto(`🚨 [${after.camera}] ${analysis.description}`, snap);
+                window.sendTelegramPhoto(`🚨 ${header}\n${analysis.description}`, snap);
 
                 const btn = document.createElement('button');
                 btn.className = 'btn-outline'; btn.style.fontSize = '9px';
@@ -388,17 +427,12 @@ ipcRenderer.on('frigate-event', async (event, data) => {
 
 // --- SYSTEM-KOMMANDON ---
 window.systemMode = 'hemma';
-window.lukasActive = false;
+window.isLukasMode = false;
 window.eventBuffer = [];
 
 window.setSystemMode = (mode) => {
-    window.systemMode = mode;
-    const modes = ['Home', 'Away', 'Sleep'];
-    modes.forEach(m => {
-        const btn = document.getElementById('btn' + m);
-        if (btn) btn.classList.toggle('active', m.toLowerCase() === mode.toLowerCase());
-    });
-    if (mode === 'hemma') window.playBriefing();
+    if (window.setGuardMode) window.setGuardMode(mode);
+    else window.systemMode = mode;
 };
 
 window.playBriefing = async () => {
@@ -419,7 +453,7 @@ window.playBriefing = async () => {
 };
 
 window.focusCamera = (cam) => console.log(`[UI] Fokus: ${cam}`);
-window.canSpeakNow = () => window.lukasActive || window.systemMode === 'hemma';
+window.canSpeakNow = () => window.isLukasMode || window.systemMode === 'hemma';
 window.onload = init;
 
 window.openIdentifyModal = async (eventId, label, snap) => {

@@ -7,7 +7,7 @@ export class Vision {
         this.video = videoElement || null;
         this.canvas = canvasElement;
         this.brain = brain;
-        this.visionModel = 'llama3.2-vision';
+        this.visionModel = 'minicpm-v';
         this.activeUser = null;
         this.lastObservedUser = "none";
         this.lastSeenTime = 0; // Tidpunkt då användaren senast sågs med säkerhet
@@ -477,6 +477,27 @@ export class Vision {
         } catch (e) { return null; }
     }
 
+    // --- NYTT: HÄMTA LIVE-BILD FRÅN FRIGATE (Istället för direkt kamera) ---
+    async getLiveSnapshotFromFrigate(cameraName) {
+        if (!cameraName) return null;
+        try {
+            console.log(`[VISION-DIAG] Begär ny bild från Frigate för ${cameraName}...`);
+            const host = window.location.hostname || 'localhost';
+            const url = `http://${host}:5050/api/${cameraName}/latest.jpg`;
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            const blob = await res.blob();
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
+        } catch (e) { 
+            console.error(`[VISION-DIAG] Kunde inte hämta live-bild för ${cameraName}:`, e);
+            return null; 
+        }
+    }
+
 
 
     // --- NYTT: TRÄNA ANSIKTE ---
@@ -518,10 +539,25 @@ export class Vision {
             const labelMap = { "person": "person", "car": "bil", "motorcycle": "motorcykel", "dog": "hund", "cat": "katt" };
             const labelSwe = labelMap[label] || label;
 
-            let sysMessage = `Svara endast på svenska. Beskriv objektet ${labelSwe} med kön, hårfärg, kläder och position i en kort mening. Använd max 15 ord och svara aldrig på engelska.`;
-            sysMessage += `\nSvara direkt med beskrivningen utan inledning.`;
+            const promptPerson = `Beskriv personen kortfattat.
+IDENTITET: ${identity || 'Okänd'}
+Format: [Namn], [Kläder], [Gör något].
+Regel: Max 10 ord. Ta namnet från IDENTITET. Om ansiktet är vitt, skriv "Ansikte: Vitt".
+Svara bara med fakta.`;
 
-            const prompt = sysMessage;
+            const promptVehicle = `Beskriv bilen kortfattat.
+IDENTITET: ${identity || 'Okänd'}
+Format: [Ägare/Okänd], [Färg], [Typ/Modell], [Status].
+Regel: Max 10 ord. Vid nattbild, skriv bara "Ljus" eller "Mörk".
+Svara bara med fakta.`;
+
+
+
+            let finalPrompt = promptVehicle; // Standard (fallback)
+            if (label === 'person') {
+                finalPrompt = promptPerson;
+            }
+
             // Robust bildrensning som hanterar alla format (jpeg, png, webp etc)
             const rawBase64 = snap.replace(/^data:image\/\w+;base64,/, "");
 
@@ -532,9 +568,16 @@ export class Vision {
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'user', content: prompt, images: [rawBase64] }
+                        { role: 'user', content: finalPrompt, images: [rawBase64] }
                     ],
-                    options: { num_predict: 50, temperature: 0.1, repeat_penalty: 1.5, top_p: 0.4 },
+                    options: { 
+                        num_predict: 80, 
+                        temperature: 0.1, 
+                        repeat_penalty: 1.2, 
+                        presence_penalty: 0.5,
+                        repeat_last_n: 64,
+                        top_p: 0.1 
+                    },
                     stream: false
                 })
             }).catch(async () => {
@@ -545,9 +588,16 @@ export class Vision {
                     body: JSON.stringify({
                         model: this.visionModel,
                         messages: [
-                            { role: 'user', content: prompt, images: [rawBase64] }
+                            { role: 'user', content: finalPrompt, images: [rawBase64] }
                         ],
-                        options: { num_predict: 50, temperature: 0.1, repeat_penalty: 1.5, top_p: 0.4 },
+                        options: { 
+                            num_predict: 80, 
+                            temperature: 0.1, 
+                            repeat_penalty: 1.6, 
+                            presence_penalty: 0.5,
+                            repeat_last_n: 64,
+                            top_p: 0.4 
+                        },
                         stream: false
                     })
                 });
@@ -627,16 +677,14 @@ export class Vision {
         }
     }
 
-    // --- NYTT: TOTAL SCAN (Alla kameror samtidigt) ---
-    async checkAllActiveDetections() {
+    // --- NYTT: HÄMTA DATA FÖR SPECIFIKT EVENT (Blixtsnabb identifiering) ---
+    async getEventData(eventId) {
+        if (!eventId) return null;
         try {
-            const res = await fetch(`http://localhost:5050/api/events?active=1`);
-            if (!res.ok) return [];
+            const res = await fetch(`http://localhost:5050/api/events/${eventId}`);
+            if (!res.ok) return null;
             return await res.json();
-        } catch (e) {
-            console.error(`[VISION-DIAG] Kunde inte nå Frigate API för total-scan:`, e);
-            return [];
-        }
+        } catch (e) { return null; }
     }
 }
 

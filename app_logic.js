@@ -124,16 +124,23 @@ export function initLogic(ui, brain, vision, audio) {
                 for (const camName of targetCams) {
                     const snap = await vision.getLiveSnapshotFromFrigate(camName);
                     if (snap) {
+                        // Visa bilden direkt för användaren
+                        window.appendImage(snap, camName);
+                        
+                        // Använd en helt neutral prompt för ögonen för att undvika moral-vägran
                         const aiReply = await brain.getOllamaResponse(window.brainModel, [
-                            { role: 'system', content: `Du är JARVIS. Titta på denna bild från ${camName}. Beskriv kortfattat vad du ser för Andreas på svenska.` },
-                            { role: 'user', content: text, images: [snap.split(',')[1]] }
+                            { role: 'system', content: `Du är en objektiv visuell sensor. 
+OM DU SER MÄNNISKOR: Använd formatet "SIGNALEMENT". Fokusera på kroppsbyggnad, kläder och särdrag. Om ansiktet är vitt, skriv "Ansikte: Överexponerat".
+OM DU SER FORDON: Använd formatet "FORDONSRAPPORT". Fokusera på typ, färg och position.
+ALLMÄN REGEL: Ignorera skuggor på väggar/bakgrund. Beskriv INTE inredning. Svara kortfattat och kliniskt.` },
+                            { role: 'user', content: `Vad ser du på bilden från ${camName}?`, images: [snap.split(',')[1]] }
                         ]);
                         multiContext.push(`${camName}: ${aiReply}`);
                     }
                 }
 
-                // 3. Generera det slutgiltiga sammanslagna svaret
-                const finalPrompt = `Användaren frågar: "${text}". Här är vad jag ser på mina olika kameror just nu:\n${multiContext.join("\n")}\n\nSvara nu baserat på denna händelseutveckling. Om Lukas-läge (${window.isLukasMode ? 'PÅ' : 'AV'}) är aktivt, svara som hans beskyddare.`;
+                // 3. Generera den slutgiltiga "fina rapporten"
+                const finalPrompt = `Användaren frågar: "${text}".\nJag har skannat kamerorna och sett följande faktiska observationer:\n${multiContext.join("\n")}\n\nSkriv nu en kort, lugnande och professionell säkerhetsrapport till Andreas. Fokusera på säkerhetsläget. Om det är lugnt, bekräfta det direkt.`;
                 const finalReply = await brain.getOllamaResponse(window.brainModel, [{ role: 'user', content: finalPrompt }]);
                 
                 window.appendMessage('AI', finalReply);
@@ -198,12 +205,16 @@ export function initLogic(ui, brain, vision, audio) {
     };
 
     window.setGuardMode = (mode) => {
+        // Mappa svenska termer till engelska för logiken
+        const modeMap = { 'hemma': 'home', 'borta': 'away', 'sova': 'sleep' };
+        const activeMode = modeMap[mode.toLowerCase()] || mode.toLowerCase();
+
         // --- SMARTA KNAPPAR (Neon-glöd) ---
         const modes = ['Home', 'Away', 'Sleep'];
         modes.forEach(m => {
             const btn = document.getElementById('btn' + m);
             if (btn) {
-                if (m.toLowerCase() === mode.toLowerCase()) {
+                if (m.toLowerCase() === activeMode) {
                     btn.classList.add('active');
                 } else {
                     btn.classList.remove('active');
@@ -212,17 +223,20 @@ export function initLogic(ui, brain, vision, audio) {
         });
 
         // Uppdatera interna tillstånd
-        if (mode === 'home') {
+        if (activeMode === 'home') {
             window.isHome = true; window.isSleeping = false;
+            window.systemMode = 'hemma';
             let msg = window.isLukasMode ? "Välkommen tillbaka Andreas. Jag har vaktat Lukas." : "Välkommen hem Andreas.";
             audio.speak(msg); window.appendMessage('AI', msg);
             window.generateHomecomingReport();
-        } else if (mode === 'away') {
+        } else if (activeMode === 'away') {
             window.isHome = false; window.isSleeping = false;
+            window.systemMode = 'borta';
             let msg = window.isLukasMode ? "Lukas, Andreas har gått. Du är under mitt beskydd." : "Borta-läge aktiverat.";
             audio.speak(msg); window.appendMessage('AI', msg);
-        } else if (mode === 'sleep') {
+        } else if (activeMode === 'sleep') {
             window.isSleeping = true; window.isHome = true;
+            window.systemMode = 'sova';
             let msg = window.isLukasMode ? "Lukas, Andreas sover. Jag håller vakt med dig." : "Nattvakt aktiverad.";
             audio.speak(msg); window.appendMessage('AI', msg);
         }
@@ -238,6 +252,7 @@ export function initLogic(ui, brain, vision, audio) {
         audio.speak(msg); window.appendMessage('AI', msg);
         window.syncCloudMemory();
     };
+    window.toggleLukasGuard = window.toggleLukasMode; // Alias för HTML-knappen
 
     window.toggleVakt = () => {
         window.vaktMode = !window.vaktMode;
@@ -318,6 +333,18 @@ export function initLogic(ui, brain, vision, audio) {
         }
         
         brain.saveBrain();
+        
+        // --- BRIDGE: Uppdatera Frigates konfiguration ---
+        if (window.electronAPI && window.electronAPI.updateDoubleTakeAlias) {
+            window.electronAPI.updateDoubleTakeAlias({ name: owner, match: cleanPlate }).then(res => {
+                if (res.success) {
+                    window.appendMessage('System', `📡 SYNC: Frigates identifiering uppdaterad för ${owner}.`);
+                } else {
+                    console.warn("Kunde inte synka till Frigate:", res.error);
+                }
+            });
+        }
+
         window.appendMessage('AI', `Fordonet ${cleanPlate} är nu registrerat på ${owner}. Jag kommer aldrig glömma bort den.`);
         audio.speak(`Fordonet registrerat. Jag håller utkik efter ${owner}s bil.`);
     };
