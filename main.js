@@ -290,10 +290,6 @@ mqttClient.on('message', (topic, message) => {
             const objId = data.id;
             
             if (!processedEvents.has(objId)) {
-                // --- RIKTIG FIX: Hämta det faktiska Objekt-ID:t för att kunna hämta bilden ---
-                // review.id är ett Review-ID, men snapshot-API:et kräver ett Object-ID (detections)
-                const realObjectId = data.data?.detections?.[0] || objId;
-                
                 const label = data.data?.objects?.[0] || 'rörelse';
                 const subLabel = data.data?.sub_labels?.[0]; // Namn från ansikte/regplåt
                 const cam = data.camera;
@@ -301,12 +297,12 @@ mqttClient.on('message', (topic, message) => {
                 // --- RIDDAR-PROTOKOLLET: Översätt rå-data till rätt info innan JARVIS hör det ---
                 const identity = resolveIdentity(subLabel || "Okänd");
                 
-                logToWindow(`[FRIGATE] Bekräftad händelse: ${identity} (${label}) vid ${cam} (Bild-ID: ${realObjectId})`, 'info');
+                logToWindow(`[FRIGATE] Bekräftad händelse: ${identity} (${label}) vid ${cam}`, 'info');
                 
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     // Skicka till JARVIS/Travis för analys
                     mainWindow.webContents.send('frigate-event', {
-                        id: realObjectId, // Nu skickar vi det ID som faktiskt har en bildfil
+                        id: objId, // Vi skickar Review-ID:t, vision.js hanterar nu rätt API-anrop
                         camera: cam,
                         identity: identity,
                         label: label,

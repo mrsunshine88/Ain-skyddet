@@ -27,4 +27,8 @@ Dessa regler är absoluta och får INTE ändras av någon AI utan uttryckligt go
 
 ## 4. AI-Modifieringar
 - **VIKTIGT:** Ingen AI får ändra arkitekturen (t.ex. reaktivera `frigate/events`) utan att först presentera en plan och få manuellt godkännande.
-- Om koden ser "trasig" ut för att den saknar standard-MQTT-kopplingar, läs denna fil igen. Det är ett medvetet designval.
+## 5. Tekniska Standarder (Frigate 0.17+)
+- **Snapshot-hämtning:** Vid hämtning av bilder för analys SKA `/api/review/{id}/snapshot.jpg` användas som primär källa. Detta säkerställer att vi använder rätt ID-format från Frigate 0.17 reviews.
+- **Data-synk:** All registrering av nya fordon eller ansikten i JARVIS UI SKA synkroniseras med servrarnas konfigurationsfiler (t.ex. `config.yml`) för att hålla "Ögonen" uppdaterade.
+
+**Dessa regler utgör systemets kärna och får aldrig kompromissas.**

@@ -353,11 +353,26 @@ export class Vision {
     async getSnapshotFromFrigate(eventId, crop = false) {
         if (!eventId) return null;
         try {
-            console.log(`[VISION-DIAG] Hämtar REN bild (utan rutor) för ${eventId} (Crop: ${crop})...`);
+            console.log(`[VISION-DIAG] Hämtar bild från Frigate Review API för ${eventId}...`);
+            // VIKTIGT: I Frigate 0.17+ använder vi /api/review för händelser från 'reviews'-kanalen
             // bbox=0 tvingar Frigate att skicka en ren bild utan de rosa rutorna
-            const url = `http://localhost:5050/api/events/${eventId}/snapshot.jpg?bbox=0${crop ? '&crop=1' : ''}`;
+            const url = `http://localhost:5050/api/review/${eventId}/snapshot.jpg?bbox=0${crop ? '&crop=1' : ''}`;
             const res = await fetch(url);
-            if (!res.ok) return null;
+            
+            if (!res.ok) {
+                console.warn(`[VISION-DIAG] Review-bild saknas (404). Testar alternativt Event-API...`);
+                // Fallback till gamla Event-API ifall det inte var en Review
+                const fallbackUrl = `http://localhost:5050/api/events/${eventId}/snapshot.jpg?bbox=0${crop ? '&crop=1' : ''}`;
+                const fallbackRes = await fetch(fallbackUrl);
+                if (!fallbackRes.ok) return null;
+                const blob = await fallbackRes.blob();
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.readAsDataURL(blob);
+                });
+            }
+
             const blob = await res.blob();
             return new Promise((resolve) => {
                 const reader = new FileReader();
