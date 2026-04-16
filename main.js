@@ -176,8 +176,26 @@ const server = http.createServer((req, res) => {
         return res.end(JSON.stringify({
             server: 'online',
             frigate: frigateConnected ? 'online' : 'offline',
-            cameras: {} // Expanderbar om vi vill ha specifik kamerastatus
+            cameras: {} 
         }));
+    }
+
+    // --- KAMERAPROXY (KOPPLING TILL FRIGATE) ---
+    if (url === '/cam1' || url === '/cam2' || url === '/cam3') {
+        const camMap = { '/cam1': 'ytterdorren', '/cam2': 'infarten', '/cam3': 'garaget' };
+        const camName = camMap[url];
+        const pReq = http.request({ 
+            hostname: '127.0.0.1', 
+            port: 5050, 
+            path: `/api/${camName}/latest.jpg`,
+            timeout: 2000 
+        }, (pRes) => {
+            res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-cache' });
+            pRes.pipe(res);
+        });
+        pReq.on('error', () => { res.writeHead(404); res.end(); });
+        pReq.end();
+        return;
     }
 
     res.writeHead(404); res.end("Not Found");
@@ -226,52 +244,27 @@ app.on('ready', () => {
     });
     mainWindow.loadURL('http://localhost:9999');
 
-    // --- MIRROR GUARD: WebSocket Server (Delar port 9999 med webbservern) ---
+    // --- MOBILE COMMANDS & NOTIFICATIONS (WebSocket) ---
     wss = new WebSocket.Server({ server: server }); 
-    logToWindow(`[REMOTE] Mirror-server aktiv via System-Link`, 'info');
+    logToWindow(`[CLOUD-SYNC] Notis-server aktiv`, 'info');
 
     wss.on('connection', (ws) => {
-        logToWindow('[REMOTE] Mobil-enhet ansluten till Mirror-länken', 'warn');
-        remoteConnected = true;
-
-        // Strömma fönstret (Bilder)
-        let streamInterval = setInterval(async () => {
-            if (ws.readyState === WebSocket.OPEN && mainWindow && !mainWindow.isDestroyed()) {
-                const image = await mainWindow.webContents.capturePage();
-                ws.send(JSON.stringify({ type: 'frame', data: image.toDataURL() }));
-            }
-        }, 100); 
-
-        // Hantera fjärrstyrning (Input)
-        ws.on('message', (message) => {
-            try {
-                const msg = JSON.parse(message);
-                const bounds = mainWindow.getBounds();
-
-                if (msg.type === 'input' && mainWindow) {
-                    mainWindow.webContents.sendInputEvent({
-                        type: msg.input.type,
-                        x: Math.floor(msg.input.x * bounds.width),
-                        y: Math.floor(msg.input.y * bounds.height),
-                        button: 'left',
-                        clickCount: 1
-                    });
-                } else if (msg.type === 'key' && mainWindow) {
-                    mainWindow.webContents.sendInputEvent({
-                        type: 'keyDown',
-                        keyCode: msg.key
-                    });
-                }
-            } catch (e) {}
-        });
-
-        ws.on('close', () => {
-            logToWindow('[REMOTE] Mobil-enhet kopplade ifrån', 'info');
-            clearInterval(streamInterval);
-            remoteConnected = false;
-        });
+        logToWindow('[MOBILE] Ny enhet ansluten för notiser', 'info');
+        ws.send(JSON.stringify({ type: 'status', text: 'SYSTEM REDO' }));
     });
 });
+
+// Funktion för att skicka notiser till alla anslutna mobiler
+function broadcastToMobile(msg) {
+    if (wss) {
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify(msg));
+            }
+        });
+    }
+}
+
 
 ipcMain.handle('list-profiles', async () => {
     if (!fs.existsSync(PROFILE_DIR)) return [];
@@ -446,6 +439,15 @@ mqttClient.on('message', (topic, message) => {
                                 
                                 const alarmText = identity === "Okänd" ? `En ${label} har upptäckts` : `${identity} (${label}) har setts`;
                                 logToWindow(`[FRIGATE] ${alarmText} vid ${cam}`, 'info');
+
+                                // Skicka även till Mobil-appen
+                                broadcastToMobile({
+                                    type: 'notification',
+                                    camera: cam,
+                                    text: alarmText,
+                                    identity: identity,
+                                    time: new Date().toLocaleTimeString()
+                                });
 
                                 if (mainWindow && !mainWindow.isDestroyed()) {
                                     mainWindow.webContents.send('frigate-event', {

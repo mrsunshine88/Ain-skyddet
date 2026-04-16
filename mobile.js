@@ -125,6 +125,9 @@ async function initTunnel() {
                 document.getElementById('thumb_cam1').src = `${BASE_URL}/cam1?t=${Date.now()}`;
                 document.getElementById('thumb_cam2').src = `${BASE_URL}/cam2?t=${Date.now()}`;
                 document.getElementById('thumb_cam3').src = `${BASE_URL}/cam3?t=${Date.now()}`;
+                
+                // Starta notis-kanalen
+                initNotifications();
             }
         }
     } catch (e) {
@@ -133,27 +136,52 @@ async function initTunnel() {
 }
 initTunnel(); // Hämta adressen direkt vid start
 
-// --- Camera Logic ---
-window.switchCam = (id, label) => {
-    if (!BASE_URL) {
-        console.log("switchCam: Väntar på tunnel-adress...");
-        return;
-    }
+// --- NOTIFICATIONS (WebSocket) ---
+let notificationWS;
+function initNotifications() {
+    if (!BASE_URL || notificationWS) return;
+    const wsUrl = BASE_URL.replace('https://', 'wss://').replace('http://', 'ws://');
+    notificationWS = new WebSocket(wsUrl);
+    
+    notificationWS.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'notification') {
+            const banner = document.getElementById('alertBanner');
+            banner.innerText = `⚠️ ${msg.text} (${msg.camera})`;
+            banner.style.display = 'flex';
+            
+            // Vibrera om möjligt
+            if (window.navigator.vibrate) window.navigator.vibrate([200, 100, 200]);
+            
+            // Dölj efter 8 sekunder
+            setTimeout(() => { banner.style.display = 'none'; }, 8000);
+        }
+    };
 
-    // --- NYTT: SEKRETESS-KONTROLL ---
-    const isAdmin = activeSession && (activeSession.role === 'admin' || activeSession.name === 'Andreas');
-    if (id === 'cam0' && !isAdmin) {
-        alert("🔒 SYSTEM: Åtkomst nekad till Master Webcam.");
-        return;
-    }
+    notificationWS.onclose = () => {
+        notificationWS = null;
+        setTimeout(initNotifications, 5000); // Reconnect
+    };
+}
+
+// --- Camera Logic ---
+let camInterval;
+window.switchCam = (id, label) => {
+    if (!BASE_URL) return;
+    
+    // Rensa gammalt intervall
+    if (camInterval) clearInterval(camInterval);
 
     currentZone = id;
-    activeCam.src = `${BASE_URL}/${id}?t=${Date.now()}`;
     if (label) activeLabel.innerText = label.toUpperCase();
     
+    // Snabb-uppdatering (Syftar på 20-30 FPS)
+    camInterval = setInterval(() => {
+        activeCam.src = `${BASE_URL}/${id}?t=${Date.now()}`;
+    }, 40); // 40ms = ~25 FPS
+
     // Update button states
     document.querySelectorAll('.cam-box').forEach(btn => btn.classList.remove('active'));
-    // Hitta rätt box baserat på ID
     const box = document.querySelector(`[onclick*="${id}"]`);
     if (box) box.classList.add('active');
 };
