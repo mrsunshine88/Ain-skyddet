@@ -115,8 +115,12 @@ async function initTunnel() {
         if (data && data.data.url) {
             BASE_URL = data.data.url;
             console.log("📱 JARVIS Hittad på:", BASE_URL);
-            // Om vi nyss hittat tunneln, uppdatera kameran direkt
-            switchCam(currentZone, document.getElementById('activeLabel').innerText);
+            
+            // Säkerhetskoll: Uppdatera bara om UI:t är redo
+            const labelEl = document.getElementById('activeLabel');
+            if (labelEl) {
+                switchCam(currentZone, labelEl.innerText);
+            }
         }
     } catch (e) {
         console.error("Tunnel discovery fail:", e);
@@ -315,7 +319,9 @@ window.toggleGallery = async () => {
     galleryGrid.innerHTML = '<div class="msg ai">Laddar incident-logg...</div>';
     
     try {
-        const res = await fetch(`${BASE_URL}/api/incidents`);
+        const res = await fetch(`${BASE_URL}/api/incidents`, {
+            headers: { 'Bypass-Tunnel-Reminder': 'true' }
+        });
         let files = await res.json();
         
         // --- NYTT: FILTRERA GALLERI ---
@@ -407,7 +413,9 @@ chatInput.onkeypress = (e) => { if (e.key === 'Enter') askAI(); };
 // --- Connection Heartbeat ---
 setInterval(async () => {
     try {
-        const res = await fetch(`${BASE_URL}/api/health`);
+        const res = await fetch(`${BASE_URL}/api/health`, {
+            headers: { 'Bypass-Tunnel-Reminder': 'true' }
+        });
         const data = await res.json();
         document.querySelector('.dot').style.background = (data.server === 'online' && data.frigate === 'online') ? '#00ff88' : '#ffcc00';
         document.getElementById('statusText').innerText = (data.server === 'online' && data.frigate === 'online') ? 'JARVIS ONLINE' : 'SYSTEMET VÄNTAR';
