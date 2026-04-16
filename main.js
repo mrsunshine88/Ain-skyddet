@@ -183,8 +183,8 @@ server.listen(9999, '0.0.0.0', async () => {
     console.log("JARVIS SERVER REDO: 0.0.0.0:9999");
     try {
         const localtunnel = require('localtunnel');
-        const randid = Math.floor(Math.random() * 90000) + 10000;
-        const tunnel = await localtunnel({ port: 9999, subdomain: 'jarvis-vakt-' + randid });
+        // VIKTIGT: Fast subdomain så att länken i mobilen aldrig ändras
+        const tunnel = await localtunnel({ port: 9999, subdomain: 'jarvis-vakt-41990' });
         
         tunnel.on('error', (err) => {
             console.error("📱 Tunnel-fel under körning:", err);
