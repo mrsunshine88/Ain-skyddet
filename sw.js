@@ -4,8 +4,11 @@ const ASSETS = [
   './mobile.css',
   './mobile.js',
   './manifest.json',
-  './supabase.client.js'
+  './supabase.client.js',
+  './icon-192.png',
+  './icon-512.png'
 ];
+
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));

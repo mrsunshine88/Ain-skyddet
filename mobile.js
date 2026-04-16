@@ -197,13 +197,24 @@ if (window.supabase) {
 }
 
 // --- PWA INSTALLATION HELPER ---
-window.deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
+    console.log("PWA: Install-prompt redo.");
     e.preventDefault();
     window.deferredPrompt = e;
+    
+    // Visa installations-knappen om den finns
     const installBtn = document.getElementById('installBtn');
-    if (installBtn) installBtn.style.display = 'block';
+    if (installBtn) {
+        installBtn.style.display = 'block';
+        // Om vi inte redan är en PWA, tvinga fram setup-rutan för att uppmuntra installation
+        const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+        if (!isPWA) {
+            const setupOverlay = document.getElementById('setupOverlay');
+            if (setupOverlay) setupOverlay.style.display = 'flex';
+        }
+    }
 });
+
 
 window.installApp = async () => {
     if (!window.deferredPrompt) return;

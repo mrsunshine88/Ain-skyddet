@@ -5,10 +5,38 @@ const { spawn } = require('child_process');
 const os = require('os');
 const net = require('net');
 const { app, BrowserWindow, ipcMain, powerSaveBlocker } = require('electron');
+const https = require('https');
 const mqtt = require('mqtt');
 const WebSocket = require('ws'); // Rensad Mirror-ström
 
+// --- SUPABASE KEYS ---
+const SUPABASE_URL = 'https://pyozlvgcaozpcydmxolv.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5b3psdmdjYW96cGN5ZG14b2x2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU5MzEyMjYsImV4cCI6MjA5MTUwNzIyNn0.GzeERLcJ3n0o0UAtJ4oPMHiNTVoFdOC8bwYqvRtbZLg';
+
+async function syncTunnelToCloud(url) {
+    const data = JSON.stringify({ key: 'remote_tunnel', data: { url: url } });
+    const options = {
+        hostname: 'pyozlvgcaozpcydmxolv.supabase.co',
+        path: '/rest/v1/jarvis_settings?on_conflict=key',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Prefer': 'resolution=merge-duplicates'
+        }
+    };
+
+    const req = https.request(options, (res) => {
+        console.log(`[CLOUD-SYNC] Tunnel-adress synkroniserad till Supabase (${res.statusCode})`);
+    });
+    req.on('error', (e) => console.error("Cloud Sync Fail:", e));
+    req.write(data);
+    req.end();
+}
+
 // Globalt fångstnät för att förhindra krascher vid nätverksfel (t.ex. LocalTunnel)
+
 process.on('uncaughtException', (error) => {
     console.error('⚠️ Obehandlat fel fångat:', error);
 });
@@ -162,6 +190,7 @@ server.listen(9999, '0.0.0.0', async () => {
         });
 
         console.log(`📱 JARVIS MOBILÅTKOMST (HTTPS): ${tunnel.url}`);
+        syncTunnelToCloud(tunnel.url);
     } catch (e) {
         console.error("📱 Kunde inte starta tunnel:", e);
     }
@@ -190,10 +219,6 @@ app.on('ready', () => {
         logToWindow('[REMOTE] Mobil-enhet ansluten till Mirror-länken', 'warn');
         remoteConnected = true;
 
-        // Spara nuvarande storlek och anpassa till mobil (Adaptive Mirroring)
-        originalBounds = mainWindow.getBounds();
-        mainWindow.setSize(400, 850); 
-
         // Strömma fönstret (Bilder)
         let streamInterval = setInterval(async () => {
             if (ws.readyState === WebSocket.OPEN && mainWindow && !mainWindow.isDestroyed()) {
@@ -206,11 +231,13 @@ app.on('ready', () => {
         ws.on('message', (message) => {
             try {
                 const msg = JSON.parse(message);
+                const bounds = mainWindow.getBounds();
+
                 if (msg.type === 'input' && mainWindow) {
                     mainWindow.webContents.sendInputEvent({
                         type: msg.input.type,
-                        x: Math.floor(msg.input.x),
-                        y: Math.floor(msg.input.y),
+                        x: Math.floor(msg.input.x * bounds.width),
+                        y: Math.floor(msg.input.y * bounds.height),
                         button: 'left',
                         clickCount: 1
                     });
@@ -227,10 +254,6 @@ app.on('ready', () => {
             logToWindow('[REMOTE] Mobil-enhet kopplade ifrån', 'info');
             clearInterval(streamInterval);
             remoteConnected = false;
-            // Återställ fönstret (Auto-Restore)
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.setSize(originalBounds.width, originalBounds.height);
-            }
         });
     });
 });

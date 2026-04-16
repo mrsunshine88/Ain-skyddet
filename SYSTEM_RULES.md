@@ -26,9 +26,12 @@ Dessa regler är absoluta och får INTE ändras av någon AI utan uttryckligt go
 - Endast bekräftade händelser får loggas.
 
 ## 4. AI-Modifieringar
+- **Data-synk (Academy Bridge):** All registrering av nya fordon eller ansikten i JARVIS UI SKA synkroniseras direkt med Frigates konfigurationsfiler (t.ex. `config.yml`) under `known_plates`. Detta säkerställer att "Ögonen" (Frigate) omedelbart lär sig nya identiteter så att de kan serveras färdigdiskade till JARVIS.
 - **VIKTIGT:** Ingen AI får ändra arkitekturen (t.ex. reaktivera `frigate/events`) utan att först presentera en plan och få manuellt godkännande.
-## 5. Tekniska Standarder (Frigate 0.17+)
-- **Snapshot-hämtning:** Vid hämtning av bilder för analys SKA `/api/review/{id}/snapshot.jpg` användas som primär källa. Detta säkerställer att vi använder rätt ID-format från Frigate 0.17 reviews.
-- **Data-synk:** All registrering av nya fordon eller ansikten i JARVIS UI SKA synkroniseras med servrarnas konfigurationsfiler (t.ex. `config.yml`) för att hålla "Ögonen" uppdaterade.
+
+## 6. Remote Mirroring (Spegling)
+- **Hitta hem:** JARVIS synkroniserar automatiskt sin `localtunnel`-adress till Supabase (`remote_tunnel`) vid start.
+- **Speglingsskydd:** Vid fjärrstyrning får JARVIS-fönstret på datorn ALDRIG ändra storlek eller utseende. All anpassning sker på klientsidan (mobilen).
+- **Säkerhet:** Alla speglings-strömmar ska ske via WSS för att fungera på moderna mobila webbläsare.
 
 **Dessa regler utgör systemets kärna och får aldrig kompromissas.**

@@ -42,10 +42,44 @@
         #hiddenInput {
             position: absolute; top: -100px; opacity: 0;
         }
+        /* LOGIN OVERLAY STYLES */
+        #loginOverlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #05080a; z-index: 10000;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .login-box {
+            background: #0d1217; padding: 30px; border-radius: 20px;
+            border: 2px solid #00f2ff; width: 85%; max-width: 320px; text-align: center;
+            box-shadow: 0 0 40px rgba(0, 242, 255, 0.15);
+        }
+        .login-box h1 { color: #00f2ff; margin-top: 0; font-size: 22px; letter-spacing: 2px; }
+        .login-input {
+            width: 100%; padding: 18px; margin: 12px 0; background: #000;
+            border: 1px solid rgba(0, 242, 255, 0.2); border-radius: 12px;
+            color: #fff; font-size: 18px; outline: none; text-align: center;
+            box-sizing: border-box;
+        }
+        .login-btn {
+            width: 100%; padding: 18px; margin-top: 20px; background: #00f2ff;
+            border: none; border-radius: 12px; color: #000; font-weight: 900;
+            cursor: pointer; text-transform: uppercase; letter-spacing: 1px;
+        }
     </style>
 </head>
 <body>
-    <div id="status">ANSLUTER TILL JARVIS...</div>
+    <div id="loginOverlay" style="display:none">
+        <div class="login-box">
+            <h1>JARVIS MIRROR</h1>
+            <p style="font-size: 11px; color: #00f2ff; opacity: 0.6; margin-bottom: 20px;">BEHÖRIGHETSKONTROLL</p>
+            <input type="number" id="loginUser" class="login-input" placeholder="KOD" inputmode="numeric">
+            <input type="password" id="loginPass" class="login-input" placeholder="PASS" inputmode="numeric">
+            <button class="login-btn" onclick="processLoginRemote()">VERIFIERA</button>
+            <p id="loginError" style="color: #f43f5e; font-size: 12px; margin-top: 15px; display: none;">TILLTRÄDE NEKAT.</p>
+        </div>
+    </div>
+
+    <div id="status">ANSLUTER...</div>
     <div id="mirrorContainer">
         <img id="mirrorFrame" src="" alt="Mirror Stream">
     </div>
@@ -53,86 +87,126 @@
     <button class="btn-keyboard" onclick="focusInput()">⌨</button>
     <input type="text" id="hiddenInput">
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
         const frame = document.getElementById('mirrorFrame');
         const status = document.getElementById('status');
         const hiddenInput = document.getElementById('hiddenInput');
-        
-        // --- DYNAMISK HOST EXTRAKTION ---
-        const host = window.location.hostname || '127.0.0.1';
-        const ws = new WebSocket(`ws://${host}:9998`);
 
-        ws.onopen = () => {
-            status.innerText = "MIRROR GUARD AKTIV";
-            status.style.borderColor = "#00ff88";
-            status.style.color = "#00ff88";
+        const SUPABASE_URL = 'https://pyozlvgcaozpcydmxolv.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5b3psdmdjYW96cGN5ZG14b2x2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU5MzEyMjYsImV4cCI6MjA5MTUwNzIyNn0.GzeERLcJ3n0o0UAtJ4oPMHiNTVoFdOC8bwYqvRtbZLg';
+
+        const localUsers = {
+            '64112': { pass: '020406', display: 'Andreas', role: 'admin' },
+            '64113': { pass: '020406', display: 'Lukas', role: 'user' },
+            '67589': { pass: '004206', display: 'Helena', role: 'user' },
+            '67590': { pass: '004206', display: 'Josephine', role: 'user' }
         };
 
-        ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'frame') {
-                frame.src = msg.data;
+        function checkAuthRemote() {
+            // Bypass om vi är på localhost
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                return true;
             }
-        };
-
-        ws.onclose = () => {
-            status.innerText = "ANSLUTNING BRUTEN";
-            status.style.borderColor = "#f43f5e";
-            status.style.color = "#f43f5e";
-        };
-
-        // --- FJÄRRSTYRNING: TOUCH TILL MUS ---
-        frame.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            const touch = e.touches[0];
-            const rect = frame.getBoundingClientRect();
-            
-            // Beräkna relativa koordinater (0 till 1)
-            const x = (touch.clientX - rect.left) / rect.width;
-            const y = (touch.clientY - rect.top) / rect.height;
-
-            // Skicka till datorn (som i sin tur mappar mot fönsterstorlek)
-            // Eftersom Electron-fönstret anpassas efter mobilen så är 
-            // x/y direkt översättbara mot fönstrets bredd/höjd
-            ws.send(JSON.stringify({
-                type: 'input',
-                input: {
-                    type: 'mouseDown',
-                    x: x * 400, // Den bredd vi satte i main.js (Adaptivt)
-                    y: y * 850  // Den höjd vi satte i main.js (Adaptivt)
-                }
-            }));
-        });
-
-        frame.addEventListener('touchend', (e) => {
-            ws.send(JSON.stringify({
-                type: 'input',
-                input: { type: 'mouseUp', x: 0, y: 0 }
-            }));
-        });
-
-        // --- SKRIVA PÅ DISTANS ---
-        function focusInput() {
-            hiddenInput.focus();
+            // Kolla session
+            const session = localStorage.getItem('jarvis_session');
+            return !!session;
         }
 
-        hiddenInput.addEventListener('input', (e) => {
-            const char = e.data;
-            if (char) {
-                ws.send(JSON.stringify({ type: 'key', key: char }));
-                hiddenInput.value = ''; // Rensa för nästa tecken
-            }
-        });
+        window.processLoginRemote = () => {
+            const user = document.getElementById('loginUser').value;
+            const pass = document.getElementById('loginPass').value;
+            const err = document.getElementById('loginError');
 
-        // Hantera Delete
-        hiddenInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                ws.send(JSON.stringify({ type: 'key', key: 'Enter' }));
-                hiddenInput.value = '';
-            } else if (e.key === 'Backspace') {
-                ws.send(JSON.stringify({ type: 'key', key: 'Backspace' }));
+            if (localUsers[user] && localUsers[user].pass === pass) {
+                localStorage.setItem('jarvis_session', JSON.stringify({ name: localUsers[user].display }));
+                document.getElementById('loginOverlay').style.display = 'none';
+                initMirror(); // Starta speglingen
+            } else {
+                err.style.display = 'block';
             }
-        });
+        };
+        
+        async function initMirror() {
+            if (!checkAuthRemote()) {
+                document.getElementById('loginOverlay').style.display = 'flex';
+                return;
+            }
+
+            try {
+                const supabase = window.supabase.createClient(SUPABASE_URL, 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5b3psdmdjYW96cGN5ZG14b2x2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU5MzEyMjYsImV4cCI6MjA5MTUwNzIyNn0.GzeERLcJ3n0o0UAtJ4oPMHiNTVoFdOC8bwYqvRtbZLg');
+                const { data } = await supabase.from('jarvis_settings').select('data').eq('key', 'remote_tunnel').single();
+                
+                if (!data || !data.data.url) {
+                    status.innerText = "INGEN AKTIV TUNNEL HITTAD";
+                    return;
+                }
+
+                const tunnelUrl = data.data.url.replace('https://', '').replace('http://', '');
+                const ws = new WebSocket(`wss://${tunnelUrl}`); // Port 9999 is proxied by localtunnel
+
+                ws.onopen = () => {
+                    status.innerText = "MIRROR GUARD AKTIV";
+                    status.style.borderColor = "#00ff88";
+                    status.style.color = "#00ff88";
+                };
+
+                ws.onmessage = (event) => {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'frame') {
+                        frame.src = msg.data;
+                    }
+                };
+
+                ws.onclose = () => {
+                    status.innerText = "ANSLUTNING BRUTEN - FÖRSÖKER IGEN...";
+                    setTimeout(initMirror, 5000);
+                };
+
+                // --- FJÄRRSTYRNING: TOUCH TILL MUS (RELATIV MAPPING) ---
+                frame.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    const touch = e.touches[0];
+                    const rect = frame.getBoundingClientRect();
+                    
+                    const x = (touch.clientX - rect.left) / rect.width;
+                    const y = (touch.clientY - rect.top) / rect.height;
+
+                    ws.send(JSON.stringify({
+                        type: 'input',
+                        input: { type: 'mouseDown', x: x, y: y }
+                    }));
+                });
+
+                frame.addEventListener('touchend', (e) => {
+                    ws.send(JSON.stringify({
+                        type: 'input',
+                        input: { type: 'mouseUp', x: 0, y: 0 }
+                    }));
+                });
+
+                // --- SKRIVA PÅ DISTANS ---
+                hiddenInput.addEventListener('input', (e) => {
+                    if (e.data) {
+                        ws.send(JSON.stringify({ type: 'key', key: e.data }));
+                        hiddenInput.value = '';
+                    }
+                });
+
+                hiddenInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') ws.send(JSON.stringify({ type: 'key', key: 'Enter' }));
+                    else if (e.key === 'Backspace') ws.send(JSON.stringify({ type: 'key', key: 'Backspace' }));
+                });
+
+            } catch (e) {
+                console.error("Mirror Init Fail:", e);
+                status.innerText = "SYSTEMFEL VID ANSLUTNING";
+            }
+        }
+
+        function focusInput() { hiddenInput.focus(); }
+        initMirror();
     </script>
+
 </body>
 </html>
