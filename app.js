@@ -277,6 +277,19 @@ window.appendImage = (base64, camName = "Kamera") => {
 
     div.appendChild(img);
     div.appendChild(label);
+
+    // --- NYTT: IDENTIFIERA-KNAPP FÖR ALLA KAMEROR (Söker på SNAPSHOT i labeln) ---
+    if (label.innerText.toUpperCase().includes('SNAPSHOT') || label.innerText.toUpperCase().includes('ZONE')) {
+        const btn = document.createElement('button');
+        btn.innerText = "🏷️ IDENTIFIERA PERSON";
+        btn.className = "btn-outline";
+        btn.style.width = "100%";
+        btn.style.marginTop = "10px";
+        btn.style.fontSize = "10px";
+        btn.onclick = () => window.openIdentifyModal(base64);
+        div.appendChild(btn);
+    }
+
     ui.chatMessages.appendChild(div);
     ui.chatMessages.scrollTop = ui.chatMessages.scrollHeight;
     return div;
@@ -383,21 +396,36 @@ ipcRenderer.on('frigate-event', async (event, data) => {
             // --- FAS 3: RAPPORT (Sammanslagning) ---
             if (analysis && analysis.description) {
                 const timestamp = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-                
-                // Om vi hittade en plåt under tiden AI:n tänkte, använd den för ökad precision
-                let finalIdentity = identity;
-                if (latestPlate && identity === "Okänd") {
-                    const resolved = brain.resolveIdentity(latestPlate);
-                    finalIdentity = resolved || latestPlate;
-                    console.log(`[JARVIS-PIPE] Hittade identitet via LPR: ${finalIdentity}`);
-                }
+                const finalIdentity = identity;
 
-                const header = `[RAPPORT]: ${camera} kl ${timestamp}`;
-                const fullReport = `${finalIdentity !== "Okänd" ? `ID: ${finalIdentity}. ` : ""}${analysis.description}`;
                 
                 // Visa bild och rapport
-                window.appendImage(snap, camera);
-                window.appendMessage('AI', `🚨 ${header}\n${fullReport}`, "", camera);
+                const msgDiv = window.appendImage(snap, camera);
+
+
+                
+                // Om personen är okänd, lägg till en snabb-knapp i meddelandet också
+                let reportSuffix = "";
+                if (identity === "Okänd") {
+                    const tagBtn = document.createElement('button');
+                    tagBtn.innerText = "Lär känna...";
+                    tagBtn.className = "btn-outline";
+                    tagBtn.style.marginLeft = "10px";
+                    tagBtn.style.padding = "2px 8px";
+                    tagBtn.onclick = () => window.openIdentifyModal(snap);
+                    
+                    // Vi lägger till knappen direkt i rapporten om det går
+                    reportSuffix = " [TRÄNA]";
+                }
+
+                const header = `🚨 [RAPPORT]: ${camera} kl ${timestamp}`;
+                const fullReport = `${finalIdentity !== "Okänd" ? `ID: ${finalIdentity}. ` : ""}${analysis.description}`;
+                const aiMsgDiv = window.appendMessage('AI', `${header}\n${fullReport}`, "", camera);
+                
+                // Om vi skapade en tagBtn tidigare, klistra in den nu!
+                if (identity === "Okänd" && typeof tagBtn !== 'undefined') {
+                    aiMsgDiv.appendChild(tagBtn);
+                }
                 
                 if (window.canSpeakNow()) audio.speak(fullReport);
                 
@@ -443,6 +471,12 @@ window.canSpeakNow = () => window.isLukasMode || window.systemMode === 'hemma';
 window.onload = init;
 
 window.openIdentifyModal = async (eventId, label, snap) => {
+    // Om vi bara får ett argument (från manuell klick), anta att det är bilden (snap)
+    if (typeof eventId === 'string' && eventId.startsWith('data:image') && !snap) {
+        snap = eventId;
+        label = "Okänd";
+    }
+
     window.pendingIdentifySnap = snap;
     window.pendingIdentifyLabel = label;
     document.getElementById('identifySnap').src = snap;
@@ -451,15 +485,28 @@ window.openIdentifyModal = async (eventId, label, snap) => {
 };
 
 window.confirmIdentification = async () => {
-    const name = document.getElementById('identifyNameInput').value.trim();
+    const nameInput = document.getElementById('identifyNameInput');
+    const name = nameInput.value.trim();
     if (!name || !window.pendingIdentifySnap) return;
+    
     document.getElementById('identifyOverlay').style.display = 'none';
+    
     try {
+        // 1. Skicka till AI-motorn direkt (för snabb träning i minnet)
         await vision.registerFaceFromBase64(name, window.pendingIdentifySnap);
-        await ipcRenderer.invoke('save-face-image', { base64: window.pendingIdentifySnap, name: name, index: Date.now() });
-        window.appendMessage('AI', `✅ Klart! Jag har lärt mig ${name}.`);
-        audio.speak(`Jag vet hur ${name} ser ut nu.`);
-    } catch (e) { console.error(e); }
+        
+        // 2. Spara i profiles-mappen (för Double-Takes permanenta minne)
+        const res = await ipcRenderer.invoke('save-face-image', { name, base64: window.pendingIdentifySnap });
+        
+        if (res.success) {
+            window.appendMessage('AI', `✅ Uppfattat. Jag har sparat bilden på ${name} i träningsmappen och informerat systemet.`);
+            audio.speak(`Jag vet hur ${name} ser ut nu.`);
+            nameInput.value = '';
+        }
+    } catch (e) { 
+        console.error("Kunde inte spara identifiering:", e);
+        window.appendMessage('System', `❌ Fel vid sparning: ${e.message}`);
+    }
 };
 
 window.openVehicleModal = (plate, snap) => {

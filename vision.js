@@ -458,7 +458,8 @@ export class Vision {
             const labelSwe = labelMap[label] || label;
 
             const promptPerson = `Svara på SVENSKA. Beskriv människan på bilden.\nFORMAT: [Kön/Ålder], [Kläder/Färger], [Vad de gör].\nMAX 20 ORD. Inget flum.`;
-            const promptVehicle = `Svara på SVENSKA. Beskriv fordonet på bilden.\nFORMAT: [Färg], [Typ/Modell], [Status].\nMAX 10 ORD.`;
+            const promptVehicle = `Svara på SVENSKA. Analysera fordonet OBJEKTIVT. Identifiera märke/modell ENBART om du ser logotypen tydligt. Annars svara endast: [Färg], [Biltyp] (t.ex. 'Blå SUV'). MAX 10 ORD.`;
+
 
             let finalPrompt = label === 'person' ? promptPerson : promptVehicle;
 

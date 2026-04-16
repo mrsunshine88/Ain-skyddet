@@ -402,57 +402,7 @@
     <script src="supabase.client.js"></script>
     <script type="module" src="app.js"></script>
     <script>
-        async function checkOllama() {
-            try {
-                const host = (window.location.hostname && window.location.hostname !== 'localhost') ? window.location.hostname : '100.107.211.53';
-                const res = await fetch(`http://${host}:11434/api/tags`);
-                const data = await res.json();
-            } catch (e) { console.error("Ollama ej tillgänglig:", e); }
-        }
-
-        window.toggleAcademy = async () => {
-            const overlay = document.getElementById('academyOverlay');
-            const video = document.getElementById('academyPreview');
-            const isOpen = overlay.style.display !== 'none';
-
-            if (!isOpen) {
-                overlay.style.display = 'flex';
-                // Starta kameran
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-                    video.srcObject = stream;
-                    window.academyStream = stream;
-                } catch (e) { console.error("Kunde inte starta Academy-kameran:", e); }
-            } else {
-                overlay.style.display = 'none';
-                // Stoppa kameran
-                if (window.academyStream) {
-                    window.academyStream.getTracks().forEach(track => track.stop());
-                    window.academyStream = null;
-                }
-            }
-        };
-
-        window.startFaceTrain = () => {
-            const name = document.getElementById('trainName').value;
-            if (name) {
-                window.trainPerson(name);
-                document.getElementById('trainName').value = '';
-            }
-        };
-
-        window.startCarReg = () => {
-            const plate = document.getElementById('regPlate').value;
-            const owner = document.getElementById('regOwner').value;
-            if (plate && owner) {
-                window.toggleAcademy();
-                window.registerCar(plate, owner);
-                document.getElementById('regPlate').value = '';
-                document.getElementById('regOwner').value = '';
-            }
-        };
-
-        // --- TAILSCALE DYNAMISK KOPPLING ---
+        // --- TAILSCALE DYNAMISK KOPPLING (Fixar svarta kameror!) ---
         window.addEventListener('load', () => {
             const host = window.location.hostname || '127.0.0.1';
             document.querySelectorAll('img[data-cam]').forEach(img => {

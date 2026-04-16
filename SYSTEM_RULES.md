@@ -5,13 +5,13 @@ Dessa regler är absoluta och får INTE ändras av någon AI utan uttryckligt go
 ## 1. Rollfördelning (Blind & Döv Arkitektur)
 - **Frigate är ÖGONEN:** Frigate övervakar alla kameror 24/7. All detektering, spårning och primär identifiering (ansikte/regplåt via Double-Take/Plugins) sker i Frigates domän.
 - **Systemlänken (main.js) är NERVSYSTEMET:**
-    - Bryggan (`main.js`) ansvarar för att "tvätta" och översätta rå-data.
-    - Om Frigate skickar ett regnr (t.ex. "ABC 123"), SKA bryggan slå upp ägaren i `brain.json` och skicka det färdiga namnet (t.ex. "Lukas bil") till JARVIS.
+    - Bryggan (`main.js`) ansvarar för att vidarebefordra den identitet Frigate redan har fastställt.
+    - Bryggan får INTE utföra egna sökningar eller gissningar i `brain.json` för att hitta ägare; detta ska vara klart i Frigates `config.yml`.
 - **JARVIS/Travis är RÖSTEN & HJÄRNAN:** JARVIS ska vara helt **blind och döv** i viloläge.
-    - JARVIS får INTE ha egna moduler för ansiktsigenkänning eller regplåtsläsning (ALPR) aktiva.
-    - JARVIS får INTE försöka "gissa" identiteter själv genom att skanna bilder lokalt.
-    - All identifiering SKA komma färdigdiskad via bryggan (`main.js`).
-    - Travis roll är begränsad till att *beskriva* scenen efter att identiteten redan är fastställd.
+    - All identifiering SKA komma färdigdiskad från Frigate (Served Identity).
+    - JARVIS får INTE försöka "gissa" identiteter själv genom att skanna bilder eller slå upp regnummer.
+    - Travis roll är strikt begränsad till att *beskriva* scenen objektivt efter att identiteten redan är fastställd.
+
 
 ## 2. Arbetsflöde för Notiser
 1. Frigate/Double-Take identifierar en person/bil.

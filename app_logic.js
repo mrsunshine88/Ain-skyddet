@@ -359,18 +359,21 @@ ALLMÄN REGEL: Svara kortfattat och kliniskt.` },
         
         brain.saveBrain();
         
-        // --- BRIDGE: Uppdatera Frigates/Double-Takes identifieringslista vid behov ---
+        // --- BRIDGE: Uppdatera Frigates identifieringslista i config.yml ---
         if (window.ipcRenderer) {
-            window.ipcRenderer.invoke('update-double-take-alias', { name: owner, match: cleanPlate }).then(res => {
+            window.ipcRenderer.invoke('update-frigate-lpr', { name: owner, plate: cleanPlate }).then(res => {
                 if (res.success) {
-                    window.appendMessage('System', `📡 SYNC: Systemets identifiering uppdaterad för ${owner}.`);
+                    window.appendMessage('System', `📡 SYNC: Frigate LPR-lista uppdaterad för ${owner}.`);
+                } else {
+                    console.error("LPR Sync misslyckades:", res.error);
                 }
             });
         }
 
-        window.appendMessage('AI', `Fordonet ${cleanPlate} är nu registrerat på ${owner}. Identitets-bryggan är uppdaterad.`);
-        if (window.canSpeakNow()) audio.speak(`Fordonet registrerat. Jag känner nu igen ${owner}s bil.`);
+        window.appendMessage('AI', `Fordonet ${cleanPlate} är nu registrerat på ${owner}. Identitets-bryggan (Frigate) är uppdaterad.`);
+        if (window.canSpeakNow()) audio.speak(`Fordonet registrerat. Frigate känner nu igen ${owner}s bil.`);
     };
+
 
     window.syncCloudMemory = async () => {
         if (!window.supabase) return;
