@@ -406,7 +406,8 @@
         window.addEventListener('load', () => {
             const host = window.location.hostname || '127.0.0.1';
             document.querySelectorAll('img[data-cam]').forEach(img => {
-                img.src = `http://${host}:5050/api/${img.dataset.cam}`;
+                // PANG-FIX: Använd lätta bilder (?h=300) istället för svintunga 82MB videoströmmar!
+                img.src = `http://${host}:5050/api/${img.dataset.cam}/latest.jpg?h=300`;
             });
         });
     </script>

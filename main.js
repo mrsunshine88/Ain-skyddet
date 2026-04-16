@@ -79,15 +79,12 @@ const streams = {};
 const server = http.createServer((req, res) => {
     // TILLÅT MOBIL-APPEN PÅ VERCEL ATT KOMMUNICERA MED DATORN (CORS)
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Bypass-Tunnel-Reminder');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Bypass-Tunnel-Reminder, Authorization');
+    res.setHeader('Access-Control-Max-Age', '86400'); // Cachea preflight i 24h
 
     if (req.method === 'OPTIONS') {
-        res.writeHead(204, {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Bypass-Tunnel-Reminder'
-        });
+        res.writeHead(204);
         return res.end();
     }
 
@@ -287,13 +284,24 @@ ipcMain.handle('read-profile-image', async (event, { name, filename }) => {
 });
 
 ipcMain.handle('save-face-image', async (event, { name, base64 }) => {
-    const dir = path.join(PROFILE_DIR, name);
+    const nameLower = name.toLowerCase(); // Tvinga till gemener för Docker-kompatibilitet
+    const dir = path.join(PROFILE_DIR, nameLower);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     
-    const filename = `${name}_${Date.now()}.jpg`;
+    const filename = `${nameLower}_${Date.now()}.jpg`;
     const p = path.join(dir, filename);
     const data = base64.replace(/^data:image\/\w+;base64,/, "");
     fs.writeFileSync(p, data, { encoding: 'base64' });
+    
+    // --- NYTT: AUTO-TRÄNA DOUBLE TAKE ---
+    try {
+        const fetch = require('node-fetch');
+        // Vi tvingar Double Take att läsa in den nya bilden direkt
+        fetch(`http://localhost:2323/api/train/${nameLower}`, { method: 'POST' })
+            .then(() => logToWindow(`[DOUBLE-TAKE] Synkronisering påbörjad för ${nameLower}`, 'info'))
+            .catch(e => console.warn("Double Take synk misslyckades (kanske offline):", e.message));
+    } catch (e) {}
+
     return { success: true, filename };
 });
 
@@ -367,6 +375,7 @@ ipcMain.handle('update-double-take-alias', async (event, { name, match }) => {
 const mqttHost = 'localhost';
 const mqttClient = mqtt.connect(`mqtt://${mqttHost}:1883`);
 const processedEvents = new Map();
+const latestDoubleTakeMatches = new Map(); // Direktmatchningar frånDouble Take
 
 // --- HJÄLPFUNKTION: IDENTITETS-TOLK (HITTAS I EN FIL) ---
 // --- HJÄLPFUNKTION: HÄMTA SENASTE SUB-LABEL FRÅN FRIGATE ---
@@ -386,7 +395,14 @@ function fetchLatestSubLabel(eventId, callback) {
 
 function resolveIdentity(rawId) {
     if (!rawId || rawId === "unknown" || rawId === "Okänd") return "Okänd";
-    return rawId; // Returera originalet - JARVIS litar nu blint på AI:ns identifiering.
+    
+    // --- NYTT: NAMN-TVÄTT (Fixar Double Take stavfel) ---
+    const id = rawId.toLowerCase();
+    if (id === 'andraes') return 'Andreas';
+    if (id === 'andreas') return 'Andreas';
+    if (id === 'lukas') return 'Lukas';
+    
+    return rawId; // Returera originalet om ingen tvätt behövs
 }
 
 mqttClient.on('connect', () => {
@@ -394,6 +410,7 @@ mqttClient.on('connect', () => {
     logToWindow("❤️ SYSTEM-LINK: SAMMANKOPPLING AKTIV", 'info');
     logToWindow("❤️ RIDDAR-PROTOKOLLET: JARVIS ÄR NU GENUINT BLIND", 'info');
     mqttClient.subscribe('frigate/reviews');
+    mqttClient.subscribe('double-take/cameras/#'); // Rätt kanal: Innehåller både ID och namn (PANG!)
 });
 
 mqttClient.on('offline', () => {
@@ -406,6 +423,25 @@ mqttClient.on('close', () => {
 });
 
 mqttClient.on('message', (topic, message) => {
+    const payload = message.toString();
+
+    // --- PANG-LÖSNINGEN 2.0: Fånga fullständiga paket direkt från källan ---
+    if (topic.startsWith('double-take/cameras/')) {
+        try {
+            const data = JSON.parse(payload);
+            const { id, matches } = data;
+            if (id && matches && matches.length > 0) {
+                const name = matches[0].name; // Ta den säkraste matchningen
+                latestDoubleTakeMatches.set(id, name);
+                console.log(`[PANG-LINK] Info direkt från källan: ${id} = ${name}`);
+                setTimeout(() => latestDoubleTakeMatches.delete(id), 300000); // Rensa efter 5 min
+            }
+        } catch (e) {
+            console.warn("[PANG-LINK] Kunde inte tolka meddelande från källa:", e.message);
+        }
+        return;
+    }
+
     if (topic === 'frigate/reviews') {
         try {
             const review = JSON.parse(message.toString());
@@ -426,41 +462,43 @@ mqttClient.on('message', (topic, message) => {
                 
                 setTimeout(() => {
                     let attempts = 0;
-                    const maxAttempts = 5;
+                    const maxAttempts = 6; // Återställt till snabb-läge (PANG-FIX Aktiv)
 
                     const retryLoop = setInterval(() => {
                         attempts++;
-                        fetchLatestSubLabel(objId, (currentSubLabel) => {
-                            const identity = resolveIdentity(currentSubLabel || "Okänd");
-                            console.log(`[JARVIS-SYNC] Försök ${attempts}/${maxAttempts}: Identitet = ${identity}`);
+                        
+                        // --- PANG-LÖSNINGEN: Kolla direkt i minnet ---
+                        const directMatch = latestDoubleTakeMatches.get(objId) || latestDoubleTakeMatches.get(eventId);
+                        const identity = resolveIdentity(directMatch || "Okänd");
+                        
+                        console.log(`[PANG-LINK] Försök ${attempts}/8: Identitet (direkt från källa) = ${identity}`);
 
-                            if (identity !== "Okänd" || attempts >= maxAttempts) {
-                                clearInterval(retryLoop);
-                                
-                                const alarmText = identity === "Okänd" ? `En ${label} har upptäckts` : `${identity} (${label}) har setts`;
-                                logToWindow(`[FRIGATE] ${alarmText} vid ${cam}`, 'info');
+                        if (identity !== "Okänd" || attempts >= 8) {
+                            clearInterval(retryLoop);
+                            
+                            const alarmText = identity === "Okänd" ? `En ${label} har upptäckts` : `${identity} (${label}) har setts`;
+                            logToWindow(`[PANG-LINK] Info mottagen: ${alarmText} vid ${cam}`, 'info');
 
-                                // Skicka även till Mobil-appen
-                                broadcastToMobile({
-                                    type: 'notification',
+                            // Skicka även till Mobil-appen
+                            broadcastToMobile({
+                                type: 'notification',
+                                camera: cam,
+                                text: alarmText,
+                                identity: identity,
+                                time: new Date().toLocaleTimeString()
+                            });
+
+                            if (mainWindow && !mainWindow.isDestroyed()) {
+                                mainWindow.webContents.send('frigate-event', {
+                                    id: eventId, 
                                     camera: cam,
-                                    text: alarmText,
                                     identity: identity,
-                                    time: new Date().toLocaleTimeString()
+                                    label: label,
+                                    raw: review,
+                                    alarmText: alarmText
                                 });
-
-                                if (mainWindow && !mainWindow.isDestroyed()) {
-                                    mainWindow.webContents.send('frigate-event', {
-                                        id: eventId, 
-                                        camera: cam,
-                                        identity: identity,
-                                        label: label,
-                                        raw: review,
-                                        alarmText: alarmText
-                                    });
-                                }
                             }
-                        });
+                        }
                     }, 1000);
                 }, 1500);
             }

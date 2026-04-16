@@ -457,11 +457,17 @@ export class Vision {
             const labelMap = { "person": "person", "car": "bil", "motorcycle": "motorcykel", "dog": "hund", "cat": "katt" };
             const labelSwe = labelMap[label] || label;
 
-            const promptPerson = `Svara på SVENSKA. Beskriv människan på bilden.\nFORMAT: [Kön/Ålder], [Kläder/Färger], [Vad de gör].\nMAX 20 ORD. Inget flum.`;
+            const promptPerson = `ANALYS: Svara på PERFEKT SVENSKA. Beskriv människan sakligt.\nFORMAT: [Okänd], [Kläder & Färger], [Glasögon: Ja/Nej], [Huvudbonad: Ja/Nej], [Gör vad].\nMAX 15 ORD. Inget flum.`;
             const promptVehicle = `Svara på SVENSKA. Analysera fordonet OBJEKTIVT. Identifiera märke/modell ENBART om du ser logotypen tydligt. Annars svara endast: [Färg], [Biltyp] (t.ex. 'Blå SUV'). MAX 10 ORD.`;
 
 
             let finalPrompt = label === 'person' ? promptPerson : promptVehicle;
+            
+            // --- NYTT: Inkludera namn i AI-instruktionen ---
+            if (label === 'person' && identity && identity !== "Okänd") {
+                // Tvinga AI:n att använda namnet och svara på SVENSKA
+                finalPrompt = `Identifierad: ${identity}. BESKRIV ENLIGT MALL PÅ PERFEKT SVENSKA: [${identity}], [Kläder & Färger], [Glasögon: Ja/Nej], [Huvudbonad: Ja/Nej], [Gör vad].\nVARNING: Svara endast med fakta utifrån bilden. Inget poetiskt 'solsken'. Max 15 ord.`;
+            }
 
             // Robust bildrensning (Hämta ren base64)
             const img = snap.includes(',') ? snap.split(',')[1] : snap;
