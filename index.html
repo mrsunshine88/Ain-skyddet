@@ -2,7 +2,8 @@
 <html lang="sv">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>VAKTHUND - SECURITY SYSTEM</title>
     <style>
         :root {
@@ -20,6 +21,33 @@
             margin: 0; overflow: hidden; display: flex; 
             height: 100vh; width: 100vw;
         }
+        
+        /* RESPONSIV DESIGN: Mobil-anpassad layout (Stackad) */
+        @media (max-width: 600px) {
+            .main-container {
+                grid-template-columns: 1fr !important;
+                grid-template-rows: 250px 1fr !important; /* Fast höjd för kameror, resten chat */
+                gap: 5px !important;
+                padding: 10px !important;
+            }
+            .chat-section {
+                min-width: unset !important;
+            }
+            .button-row {
+                padding: 10px !important;
+            }
+            .btn-action {
+                font-size: 9px !important;
+                padding: 8px !important;
+            }
+            #statusPill {
+                top: 5px; left: 5px; transform: scale(0.85);
+            }
+            .camera-grid {
+                grid-template-columns: 1fr 1fr !important; /* Fortfarande 2x2 på mobilen */
+            }
+        }
+
         #statusPill {
             position: absolute; top: 15px; left: 15px;
             background: rgba(0,0,0,0.85); padding: 6px 14px; border-radius: 20px;

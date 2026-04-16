@@ -128,15 +128,28 @@ export function initLogic(ui, brain, vision, audio) {
                 for (const camName of targetCams) {
                     const snap = await vision.getLiveSnapshotFromFrigate(camName);
                     if (snap) {
+                        // --- NYTT: HÄMTA METADATA FRÅN FRIGATE (Regnummer) ---
+                        let metadataLabel = "";
+                        if (lowerText.includes("bil") || lowerText.includes("infart") || lowerText.includes("vem")) {
+                            const plate = await vision.getLatestPlate(camName);
+                            if (plate) {
+                                // Slå upp ägare i brain.json
+                                const identity = typeof window.resolveIdentity === 'function' ? window.resolveIdentity(plate) : plate;
+                                metadataLabel = `[FRIGATE-INFO]: Senast identifierade fordon vid denna plats: ${identity} (${plate}). `;
+                                console.log(`[LOGIC-DIAG] Hittade metadata för ${camName}: ${identity}`);
+                            }
+                        }
+
                         // Visa bilden direkt för användaren
                         window.appendImage(snap, camName);
                         
                         // Använd en helt neutral prompt för ögonen för att undvika moral-vägran
                         const aiReply = await brain.getOllamaResponse(window.brainModel, [
                             { role: 'system', content: `Du är en objektiv visuell sensor. 
-OM DU SER MÄNNISKOR: Använd formatet "SIGNALEMENT". Fokusera på kroppsbyggnad, kläder och särdrag. Om ansiktet är vitt, skriv "Ansikte: Överexponerat".
+OM DU SER MÄNNISKOR: Använd formatet "SIGNALEMENT". Fokusera på kroppsbyggnad, kläder och särdrag.
 OM DU SER FORDON: Använd formatet "FORDONSRAPPORT". Fokusera på typ, färg och position.
-ALLMÄN REGEL: Ignorera skuggor på väggar/bakgrund. Beskriv INTE inredning. Svara kortfattat och kliniskt.` },
+${metadataLabel ? `INFO FRÅN FRIGATE: ${metadataLabel}. Använd denna info för att bekräfta vem bilen tillhör.` : ""}
+ALLMÄN REGEL: Svara kortfattat och kliniskt.` },
                             { role: 'user', content: `Vad ser du på bilden från ${camName}?`, images: [snap.split(',')[1]] }
                         ]);
                         multiContext.push(`${camName}: ${aiReply}`);

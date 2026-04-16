@@ -6,6 +6,7 @@ const os = require('os');
 const net = require('net');
 const { app, BrowserWindow, ipcMain, powerSaveBlocker } = require('electron');
 const mqtt = require('mqtt');
+const WebSocket = require('ws'); // Rensad Mirror-ström
 
 // Globalt fångstnät för att förhindra krascher vid nätverksfel (t.ex. LocalTunnel)
 process.on('uncaughtException', (error) => {
@@ -28,6 +29,10 @@ if (!fs.existsSync(PROFILE_DIR)) fs.mkdirSync(PROFILE_DIR);
 if (!fs.existsSync(VEHICLE_DIR)) fs.mkdirSync(VEHICLE_DIR, { recursive: true });
 
 let mainWindow;
+let wss; // WebSocket Server för Remote
+const REMOTE_PORT = 9998;
+let originalBounds = { width: 1200, height: 800 }; // Standardstorlek
+let frigateConnected = false; // Status-tracker för UI
 
 function logToWindow(msg, type = 'info') {
     console.log(`[${type.toUpperCase()}] ${msg}`);
@@ -133,6 +138,14 @@ const server = http.createServer((req, res) => {
         });
         return;
     }
+    if (url === '/api/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({
+            server: 'online',
+            frigate: frigateConnected ? 'online' : 'offline',
+            cameras: {} // Expanderbar om vi vill ha specifik kamerastatus
+        }));
+    }
 
     res.writeHead(404); res.end("Not Found");
 });
@@ -156,8 +169,10 @@ server.listen(9999, '0.0.0.0', async () => {
 
 app.on('ready', () => {
     mainWindow = new BrowserWindow({ 
-        width: 1500, height: 1100, 
+        width: originalBounds.width, 
+        height: originalBounds.height, 
         backgroundColor: '#05080a', 
+        frame: true, // Återställt: Tillåt användaren att flytta/stänga fönstret
         webPreferences: { 
             nodeIntegration: true, 
             contextIsolation: false, 
@@ -166,7 +181,58 @@ app.on('ready', () => {
         } 
     });
     mainWindow.loadURL('http://localhost:9999');
-    mainWindow.webContents.openDevTools(); // Öppnar diagnostikfönstret automatiskt för felsökning
+
+    // --- MIRROR GUARD: WebSocket Server (Delar port 9999 med webbservern) ---
+    wss = new WebSocket.Server({ server: server }); 
+    logToWindow(`[REMOTE] Mirror-server aktiv via System-Link`, 'info');
+
+    wss.on('connection', (ws) => {
+        logToWindow('[REMOTE] Mobil-enhet ansluten till Mirror-länken', 'warn');
+        remoteConnected = true;
+
+        // Spara nuvarande storlek och anpassa till mobil (Adaptive Mirroring)
+        originalBounds = mainWindow.getBounds();
+        mainWindow.setSize(400, 850); 
+
+        // Strömma fönstret (Bilder)
+        let streamInterval = setInterval(async () => {
+            if (ws.readyState === WebSocket.OPEN && mainWindow && !mainWindow.isDestroyed()) {
+                const image = await mainWindow.webContents.capturePage();
+                ws.send(JSON.stringify({ type: 'frame', data: image.toDataURL() }));
+            }
+        }, 100); 
+
+        // Hantera fjärrstyrning (Input)
+        ws.on('message', (message) => {
+            try {
+                const msg = JSON.parse(message);
+                if (msg.type === 'input' && mainWindow) {
+                    mainWindow.webContents.sendInputEvent({
+                        type: msg.input.type,
+                        x: Math.floor(msg.input.x),
+                        y: Math.floor(msg.input.y),
+                        button: 'left',
+                        clickCount: 1
+                    });
+                } else if (msg.type === 'key' && mainWindow) {
+                    mainWindow.webContents.sendInputEvent({
+                        type: 'keyDown',
+                        keyCode: msg.key
+                    });
+                }
+            } catch (e) {}
+        });
+
+        ws.on('close', () => {
+            logToWindow('[REMOTE] Mobil-enhet kopplade ifrån', 'info');
+            clearInterval(streamInterval);
+            remoteConnected = false;
+            // Återställ fönstret (Auto-Restore)
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.setSize(originalBounds.width, originalBounds.height);
+            }
+        });
+    });
 });
 
 ipcMain.handle('list-profiles', async () => {
@@ -242,7 +308,8 @@ ipcMain.handle('update-double-take-alias', async (event, { name, match }) => {
 });
 
 // --- MQTT BRYGGA FÖR FRIGATE ---
-const mqttClient = mqtt.connect('mqtt://localhost:1883');
+const mqttHost = 'localhost';
+const mqttClient = mqtt.connect(`mqtt://${mqttHost}:1883`);
 const processedEvents = new Map();
 
 // --- HJÄLPFUNKTION: IDENTITETS-TOLK (HITTAS I EN FIL) ---
@@ -273,13 +340,19 @@ function resolveIdentity(rawId) {
 }
 
 mqttClient.on('connect', () => {
+    frigateConnected = true;
     logToWindow("❤️ SYSTEM-LINK: SAMMANKOPPLING AKTIV", 'info');
     logToWindow("❤️ RIDDAR-PROTOKOLLET: JARVIS ÄR NU GENUINT BLIND", 'info');
     mqttClient.subscribe('frigate/reviews');
 });
 
 mqttClient.on('offline', () => {
+    frigateConnected = false;
     logToWindow("📡 MQTT-STATUS: Offline. Försöker återansluta...", 'warn');
+});
+
+mqttClient.on('close', () => {
+    frigateConnected = false;
 });
 
 mqttClient.on('message', (topic, message) => {
@@ -288,30 +361,34 @@ mqttClient.on('message', (topic, message) => {
             const review = JSON.parse(message.toString());
             const data = review.after || review; 
             const objId = data.id;
+            const cam = data.camera;
+            const eventKey = `${cam}_${objId}`;
             
-            if (!processedEvents.has(objId)) {
+            if (!processedEvents.has(eventKey)) {
+                // --- KORREKT ID FÖR FRIGATE 0.17 (Detection ID) ---
+                const eventId = data.data?.detections?.[0] || objId; 
                 const label = data.data?.objects?.[0] || 'rörelse';
-                const subLabel = data.data?.sub_labels?.[0]; // Namn från ansikte/regplåt
-                const cam = data.camera;
+                const subLabel = data.data?.sub_labels?.[0]; 
                 
-                // --- RIDDAR-PROTOKOLLET: Översätt rå-data till rätt info innan JARVIS hör det ---
                 const identity = resolveIdentity(subLabel || "Okänd");
                 
-                logToWindow(`[FRIGATE] Bekräftad händelse: ${identity} (${label}) vid ${cam}`, 'info');
+                // --- LOGIK-FÖRBÄTTRING (Vem vs Vad) ---
+                const alarmText = identity === "Okänd" ? `En ${label} har upptäckts` : `${identity} (${label}) har setts`;
+                logToWindow(`[FRIGATE] ${alarmText} vid ${cam} (Event ID: ${eventId})`, 'info');
                 
                 if (mainWindow && !mainWindow.isDestroyed()) {
-                    // Skicka till JARVIS/Travis för analys
                     mainWindow.webContents.send('frigate-event', {
-                        id: objId, // Vi skickar Review-ID:t, vision.js hanterar nu rätt API-anrop
+                        id: eventId, 
                         camera: cam,
                         identity: identity,
                         label: label,
-                        raw: review 
+                        raw: review,
+                        alarmText: alarmText
                     });
                 }
 
-                processedEvents.set(objId, true);
-                setTimeout(() => processedEvents.delete(objId), 300000); 
+                processedEvents.set(eventKey, true);
+                setTimeout(() => processedEvents.delete(eventKey), 300000); 
             }
         } catch (e) {
             console.error("MQTT: Fel vid parsing av Frigate-review:", e);

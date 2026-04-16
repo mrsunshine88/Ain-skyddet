@@ -344,43 +344,67 @@ ipcRenderer.on('frigate-event', async (event, data) => {
     const identity = data.identity || "Okänd"; 
     const label = data.label || "rörelse";
 
-    // Deduplicering vid behov
+    // Deduplicering per kamera (Riddar-protokollet: larma för varje NY vy)
     if (!window.activeReviews) window.activeReviews = new Set();
-    if (window.activeReviews.has(objId)) return;
-    window.activeReviews.add(objId);
-    setTimeout(() => window.activeReviews.delete(objId), 300000);
+    const eventKey = `${camera}_${objId}`;
+    if (window.activeReviews.has(eventKey)) return;
+    
+    window.activeReviews.add(eventKey);
+    setTimeout(() => window.activeReviews.delete(eventKey), 300000);
 
     (async () => {
-        // --- FAS 1: ANNONSERING (Omedelbar bekräftelse baserat på Frigates data) ---
+        // --- FAS 1: ANNONSERING (Sekund 0) ---
+        // Vi larmar direkt utan att vänta på någonting.
         const initialNotice = `${identity} upptäckt vid ${camera}.`;
-        
         window.appendMessage('System', `🔔 [BEVAKNING]: ${initialNotice}`);
         if (window.canSpeakNow()) audio.speak(initialNotice);
 
-        // --- FAS 2: ANALYS (Travis ser bilden efter att han blivit väckt) ---
-        // Hämta en ren 1080p snapshot för Travis analys
-        const snap = await vision.getSnapshotFromFrigate(objId, false);
-        if (!snap) return;
+        // --- FAS 2: PARALLELL EXEKVERING (Blixtsnabbheten) ---
+        // Vi startar bildhämtning (zoom) och metadata-uppslag samtidigt.
+        console.log(`[JARVIS-PIPE] Startar parallell analys för ${camera}...`);
+        
+        const metadataPromise = vision.getLatestPlate(camera);
+        const snapPromise = vision.getSnapshotFromFrigate(objId, true); // true = SMART ZOOM (Crop)
+
+        const [latestPlate, snap] = await Promise.all([metadataPromise, snapPromise]);
+
+        if (!snap) {
+            console.warn(`[JARVIS-PIPE] Kunde inte hämta händelsebild för ${camera}. Avbryter analys.`);
+            return;
+        }
 
         const visionTargets = ["person", "car", "motorcycle", "dog", "cat"];
         if (visionTargets.includes(label)) {
-            // Travis beskriver vad han ser på bilden (inget gissande av namn/regnr här)
+            window.appendMessage('System', `🧠 [ANALYS]: Travis tittar närmare på ${label === 'person' ? 'personen' : 'fordonet'}...`);
+            
+            // Kör AI-analysen
             const analysis = await vision.analyzeIntruder(snap, label, identity, camera);
             
-            // --- FAS 3: RAPPORT (Den fullständiga beskrivningen) ---
+            // --- FAS 3: RAPPORT (Sammanslagning) ---
             if (analysis && analysis.description) {
                 const timestamp = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+                
+                // Om vi hittade en plåt under tiden AI:n tänkte, använd den för ökad precision
+                let finalIdentity = identity;
+                if (latestPlate && identity === "Okänd") {
+                    const resolved = brain.resolveIdentity(latestPlate);
+                    finalIdentity = resolved || latestPlate;
+                    console.log(`[JARVIS-PIPE] Hittade identitet via LPR: ${finalIdentity}`);
+                }
+
                 const header = `[RAPPORT]: ${camera} kl ${timestamp}`;
+                const fullReport = `${finalIdentity !== "Okänd" ? `ID: ${finalIdentity}. ` : ""}${analysis.description}`;
                 
+                // Visa bild och rapport
                 window.appendImage(snap, camera);
-                window.appendMessage('AI', `🚨 ${header}\n${analysis.description}`, "", camera);
+                window.appendMessage('AI', `🚨 ${header}\n${fullReport}`, "", camera);
                 
-                if (window.canSpeakNow()) audio.speak(analysis.description);
+                if (window.canSpeakNow()) audio.speak(fullReport);
                 
                 if (window.systemMode !== 'hemma') {
-                    window.sendTelegramPhoto(`🚨 ${header}\n${analysis.description}`, snap);
+                    window.sendTelegramPhoto(`🚨 ${header}\n${fullReport}`, snap);
                     if (!window.eventBuffer) window.eventBuffer = [];
-                    window.eventBuffer.push(`${timestamp}: ${analysis.description}`);
+                    window.eventBuffer.push(`${timestamp}: ${fullReport}`);
                 }
             }
         }

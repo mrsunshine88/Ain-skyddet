@@ -13,7 +13,8 @@ export class Vision {
         this.video = videoElement || null;
         this.canvas = canvasElement;
         this.brain = brain;
-        this.visionModel = 'minicpm-v';
+        this.visionModel = 'llama3.2-vision';
+        this.isOllamaBusy = false;
         this.activeUser = null;
         this.lastObservedUser = "none";
         this.lastSeenTime = 0; // Tidpunkt då användaren senast sågs med säkerhet
@@ -352,34 +353,46 @@ export class Vision {
     // --- NYTT: SMART GUARD VISION ---
     async getSnapshotFromFrigate(eventId, crop = false) {
         if (!eventId) return null;
-        try {
-            console.log(`[VISION-DIAG] Hämtar bild från Frigate Review API för ${eventId}...`);
-            // VIKTIGT: I Frigate 0.17+ använder vi /api/review för händelser från 'reviews'-kanalen
-            // bbox=0 tvingar Frigate att skicka en ren bild utan de rosa rutorna
-            const url = `http://localhost:5050/api/review/${eventId}/snapshot.jpg?bbox=0${crop ? '&crop=1' : ''}`;
-            const res = await fetch(url);
-            
-            if (!res.ok) {
-                console.warn(`[VISION-DIAG] Review-bild saknas (404). Testar alternativt Event-API...`);
-                // Fallback till gamla Event-API ifall det inte var en Review
-                const fallbackUrl = `http://localhost:5050/api/events/${eventId}/snapshot.jpg?bbox=0${crop ? '&crop=1' : ''}`;
-                const fallbackRes = await fetch(fallbackUrl);
-                if (!fallbackRes.ok) return null;
-                const blob = await fallbackRes.blob();
-                return new Promise((resolve) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result);
-                    reader.readAsDataURL(blob);
-                });
-            }
+        
+        // --- FAS 1: INITIAL PAUS (1.5 sekunder) ---
+        // För att ge Frigate tid att buffra och skriva ner händelse-bilden på hårddisken.
+        console.log(`[JARVIS-RETRY] Väntar 1.5s innan första hämtningsförsöket...`);
+        await new Promise(r => setTimeout(r, 1500));
 
-            const blob = await res.blob();
-            return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result);
-                reader.readAsDataURL(blob);
-            });
-        } catch (e) { return null; }
+        const host = window.location.hostname || 'localhost';
+        // bbox=1&crop=1 klipper ut HELA människan/bilen från trädgården
+        const url = `http://${host}:5050/api/events/${eventId}/snapshot.jpg?bbox=1&crop=1`;
+
+        // --- FAS 2: RETRY-LOOP (5 försök) ---
+        for (let i = 1; i <= 5; i++) {
+            try {
+                console.log(`[JARVIS-RETRY] Försök ${i}/5 att hämta utklipp: ${url}`);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); 
+
+                const res = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (res.ok) {
+                    console.log(`[JARVIS-RETRY] ✅ Utklipp hämtat på försök ${i}!`);
+                    const blob = await res.blob();
+                    return new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result);
+                        reader.readAsDataURL(blob);
+                    });
+                }
+                
+                console.warn(`[JARVIS-RETRY] ⚠️ Försök ${i} misslyckades (Status: ${res.status}). Väntar 1s...`);
+            } catch (e) {
+                console.error(`[JARVIS-RETRY] ❌ Nätverksfel vid försök ${i}:`, e.message);
+            }
+            
+            if (i < 5) await new Promise(r => setTimeout(r, 1000));
+        }
+
+        console.error(`[JARVIS-RETRY] 💀 Gav upp efter 5 försök. Inget utklipp hittades.`);
+        return null;
     }
 
     // --- NYTT: HÄMTA LIVE-BILD FRÅN FRIGATE (Istället för direkt kamera) ---
@@ -444,58 +457,46 @@ export class Vision {
             const labelMap = { "person": "person", "car": "bil", "motorcycle": "motorcykel", "dog": "hund", "cat": "katt" };
             const labelSwe = labelMap[label] || label;
 
-            const promptPerson = `Beskriv personen snabbt.\nFORMAT: [Okänd/Namn], [Kläder], [Gör nåt].\nMAX 20 ORD. Inget flum.`;
-            const promptVehicle = `Beskriv bilen snabbt.\nFORMAT: [Färg], [Typ/Modell], [Status].\nMAX 8 ORD. Inga gissningar. Om regnummer syns, skriv Plate: [Nummer].`;
+            const promptPerson = `Svara på SVENSKA. Beskriv människan på bilden.\nFORMAT: [Kön/Ålder], [Kläder/Färger], [Vad de gör].\nMAX 20 ORD. Inget flum.`;
+            const promptVehicle = `Svara på SVENSKA. Beskriv fordonet på bilden.\nFORMAT: [Färg], [Typ/Modell], [Status].\nMAX 10 ORD.`;
 
-            let finalPrompt = promptVehicle;
-            if (label === 'person') finalPrompt = promptPerson;
+            let finalPrompt = label === 'person' ? promptPerson : promptVehicle;
 
-            // Robust bildrensning som hanterar alla format (jpeg, png, webp etc)
-            const rawBase64 = snap.replace(/^data:image\/\w+;base64,/, "");
+            // Robust bildrensning (Hämta ren base64)
+            const img = snap.includes(',') ? snap.split(',')[1] : snap;
+            if (!img) return { description: "Bildfel: Kunde inte avkoda fotot.", classification: "Okänd", threatLevel: 1 };
 
-            const host = '127.0.0.1';
+            console.log(`[VISION-DIAG] Skickar analys till GPU (Modell: ${this.visionModel})...`);
+            
+            const host = window.location.hostname || '127.0.0.1';
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout för llama3.2-vision
+
             const res = await fetch(`http://${host}:11434/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'user', content: finalPrompt, images: [rawBase64] }
+                        { role: 'system', content: 'Du är en säkerhetsvakt som alltid svarar på kortfattad svenska. Inga engelska ord.' },
+                        { role: 'user', content: finalPrompt, images: [img] }
                     ],
                     options: {
                         num_predict: 80,
                         temperature: 0.1,
                         repeat_penalty: 1.2,
-                        presence_penalty: 0.5,
-                        repeat_last_n: 64,
                         top_p: 0.1
                     },
                     stream: false
-                })
-            }).catch(async () => {
-                const remoteHost = window.location.hostname || '127.0.0.1';
-                return await fetch(`http://${remoteHost}:11434/api/chat`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: this.visionModel,
-                        messages: [
-                            { role: 'user', content: finalPrompt, images: [rawBase64] }
-                        ],
-                        options: {
-                            num_predict: 80,
-                            temperature: 0.1,
-                            repeat_penalty: 1.6,
-                            presence_penalty: 0.5,
-                            repeat_last_n: 64,
-                            top_p: 0.4
-                        },
-                        stream: false
-                    })
-                });
+                }),
+                signal: controller.signal
             });
+            
+            clearTimeout(timeoutId);
             const data = await res.json();
             const content = data.message?.content || "";
+
+            console.log(`[VISION-DIAG] GPU Klar! Svar: ${content}`);
 
             // Analysera innehåll för logik efteråt
             let classification = label === "person" ? "Människa" : "Fordon";
@@ -513,7 +514,7 @@ export class Vision {
                 isAccident: content.toLowerCase().includes("marken") || content.toLowerCase().includes("skadad")
             };
         } catch (e) {
-            console.error("VLM-Beskrivning misslyckades:", e);
+            console.error("[VISION-DIAG] VLM-Beskrivning misslyckades:", e);
             return { description: "Analys misslyckades på grund av tekniskt fel.", classification: "Okänd", threatLevel: 1 };
         }
     }
@@ -573,10 +574,37 @@ export class Vision {
     async getEventData(eventId) {
         if (!eventId) return null;
         try {
-            const res = await fetch(`http://localhost:5050/api/events/${eventId}`);
+            const host = window.location.hostname || 'localhost';
+            const res = await fetch(`http://${host}:5050/api/events/${eventId}`);
             if (!res.ok) return null;
             return await res.json();
         } catch (e) { return null; }
+    }
+
+    // --- NYTT: HÄMTA SENAST LÄSTA REGNUMMER (För manuella frågor) ---
+    async getLatestPlate(cameraName) {
+        if (!cameraName) return null;
+        try {
+            console.log(`[VISION-DIAG] Frågar Frigate om metadata för ${cameraName}...`);
+            const host = window.location.hostname || 'localhost';
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout för metadata
+
+            const res = await fetch(`http://${host}:5050/api/events?camera=${cameraName}&limit=1&has_sub_label=1`, { 
+                signal: controller.signal 
+            });
+            clearTimeout(timeoutId);
+
+            if (!res.ok) return null;
+            const events = await res.json();
+            if (events && events.length > 0 && events[0].sub_label) {
+                return events[0].sub_label;
+            }
+            return null;
+        } catch (e) {
+            console.error(`[VISION-DIAG] Kunde inte hämta metadata från Frigate (Timeout?):`, e);
+            return null;
+        }
     }
 }
 
