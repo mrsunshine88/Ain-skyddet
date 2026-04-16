@@ -1,4 +1,4 @@
-const BASE_URL = ''; // Använd relativa sökvägar för PWA-stabilitet
+let BASE_URL = ''; // Dynamisk adress från Supabase
 
 // --- UI Elements ---
 const activeCam = document.getElementById('activeCam');
@@ -107,6 +107,23 @@ window.processLogin = async () => {
 
 checkAuth(); // Kör direkt vid laddning
 
+// --- TUNNEL DISCOVERY (HITTA HEM) ---
+async function initTunnel() {
+    if (!window.supabase) return;
+    try {
+        const { data } = await window.supabase.from('jarvis_settings').select('data').eq('key', 'remote_tunnel').single();
+        if (data && data.data.url) {
+            BASE_URL = data.data.url;
+            console.log("📱 JARVIS Hittad på:", BASE_URL);
+            // Om vi nyss hittat tunneln, uppdatera kameran direkt
+            switchCam(currentZone, document.getElementById('activeLabel').innerText);
+        }
+    } catch (e) {
+        console.error("Tunnel discovery fail:", e);
+    }
+}
+initTunnel(); // Hämta adressen direkt vid start
+
 // --- Camera Logic ---
 window.switchCam = (id, label) => {
     // --- NYTT: SEKRETESS-KONTROLL ---
@@ -117,7 +134,7 @@ window.switchCam = (id, label) => {
     }
 
     currentZone = id;
-    activeCam.src = `/${id}?t=${Date.now()}`;
+    activeCam.src = `${BASE_URL}/${id}?t=${Date.now()}`;
     activeLabel.innerText = label.toUpperCase();
     
     // Update button states
@@ -298,7 +315,7 @@ window.toggleGallery = async () => {
     galleryGrid.innerHTML = '<div class="msg ai">Laddar incident-logg...</div>';
     
     try {
-        const res = await fetch(`/api/incidents`);
+        const res = await fetch(`${BASE_URL}/api/incidents`);
         let files = await res.json();
         
         // --- NYTT: FILTRERA GALLERI ---
@@ -320,7 +337,7 @@ window.toggleGallery = async () => {
             const time = file.split('_')[1];
             const displayTime = time ? new Date(parseInt(time)).toLocaleTimeString() : 'Tid okänd';
             div.innerHTML = `
-                <img src="/incidents/${file}" loading="lazy">
+                <img src="${BASE_URL}/incidents/${file}" loading="lazy">
                 <div class="item-label">${displayTime}</div>
             `;
             galleryGrid.appendChild(div);
@@ -390,7 +407,7 @@ chatInput.onkeypress = (e) => { if (e.key === 'Enter') askAI(); };
 // --- Connection Heartbeat ---
 setInterval(async () => {
     try {
-        const res = await fetch('/api/health');
+        const res = await fetch(`${BASE_URL}/api/health`);
         const data = await res.json();
         document.querySelector('.dot').style.background = (data.server === 'online' && data.frigate === 'online') ? '#00ff88' : '#ffcc00';
         document.getElementById('statusText').innerText = (data.server === 'online' && data.frigate === 'online') ? 'JARVIS ONLINE' : 'SYSTEMET VÄNTAR';

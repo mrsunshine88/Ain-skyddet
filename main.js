@@ -77,8 +77,7 @@ const streams = {};
 // Kamerasändare raderad för ökad prestanda
 
 const server = http.createServer((req, res) => {
-    const url = req.url;
-    // --- API & Webbfiler ---
+    // TILLÅT MOBIL-APPEN PÅ VERCEL ATT KOMMUNICERA MED DATORN (CORS)
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -87,6 +86,8 @@ const server = http.createServer((req, res) => {
         res.writeHead(204);
         return res.end();
     }
+
+    const url = req.url;
 
     if (url.startsWith('/api/health')) {
         const status = {
