@@ -40,23 +40,35 @@
             font-weight: bold; border: none; padding: 10px; margin-top: 10px;
             border-radius: 8px; cursor: pointer;
         }
+        .active-cam-container {
+            position: relative; width: 100%; aspect-ratio: 16/9; background: #000;
+            border-bottom: 2px solid #00f2ff; overflow: hidden;
+        }
+        #activeCam { width: 100%; height: 100%; object-fit: cover; }
+        .active-cam-label {
+            position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7);
+            color: #00f2ff; padding: 5px 12px; font-weight: bold; border-radius: 4px; z-index: 10;
+        }
+        .cam-id-badge {
+            position: absolute; top: 10px; right: 10px; background: rgba(0, 255, 136, 0.8);
+            color: #000; padding: 5px 12px; font-weight: 900; border-radius: 4px;
+            display: none; z-index: 10;
+        }
+        .cam-id-badge.active { display: block; animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
         .cam-grid {
-            display: flex; flex-direction: column; gap: 5px; width: 100%; margin-bottom: 10px;
+            display: flex; gap: 10px; padding: 15px; overflow-x: auto; background: #0a0e12;
         }
         .cam-box {
-            position: relative; width: 100%; aspect-ratio: 16/9; background: #000;
-            border: 1px solid rgba(0,242,255,0.1); border-radius: 8px; overflow: hidden;
+            min-width: 120px; aspect-ratio: 16/9; background: #000;
+            border: 1px solid rgba(0,242,255,0.2); border-radius: 8px; overflow: hidden; position: relative;
         }
-        .cam-box img { width: 100%; height: 100%; object-fit: cover; }
+        .cam-box.active { border-color: #00f2ff; box-shadow: 0 0 10px rgba(0,242,255,0.3); }
+        .cam-box img { width: 100%; height: 100%; object-fit: cover; opacity: 0.6; }
         .cam-sm-label {
-            position: absolute; bottom: 5px; left: 5px; background: rgba(0,0,0,0.7);
-            color: #00f2ff; padding: 2px 8px; font-size: 10px; font-weight: bold;
-            border-radius: 4px; pointer-events: none;
-        }
-        .cam-sm-badge {
-            position: absolute; top: 5px; right: 5px; background: rgba(255,0,0,0.8);
-            color: #fff; padding: 2px 6px; font-size: 10px; font-weight: bold;
-            border-radius: 4px; display: none;
+            position: absolute; bottom: 4px; left: 4px; background: rgba(0,0,0,0.8);
+            color: #fff; font-size: 8px; padding: 2px 5px; border-radius: 2px;
         }
     </style>
     <script>
@@ -77,12 +89,10 @@
         </div>
     </div>
 
-    <!-- Tvingande installationsruta efter inloggning, om valen inte gjorts tidigare -->
     <div id="setupOverlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #05080a; z-index: 9999; align-items: center; justify-content: center;">
         <div class="login-box" style="width: 90%;">
             <h1 style="color:#00ff88">SYSTEM SETUP</h1>
             <p style="color: white; font-size: 14px;">För att JARVIS ska fungera korrekt på mobilen måste du tillåta larm (aviseringar) och installera appen till hemskärmen.</p>
-            
             <button id="installBtn" class="login-btn" style="background:#ffcc00; display:none;" onclick="window.installApp()">1. INSTALLERA APPEN</button>
             <button id="pushBtn" class="login-btn" style="background:#00f2ff;" onclick="window.subscribeToPush()">2. TILLÅT LARM (NOTISER)</button>
             <button class="login-btn" style="background:#333; color:#fff;" onclick="document.getElementById('setupOverlay').style.display='none'">HOPPA ÖVER</button>
@@ -90,40 +100,37 @@
     </div>
 
     <div id="app">
-        <!-- Top Bar -->
         <header>
             <div class="status-pill">
                 <div class="dot online"></div>
-                <span id="statusText">JARVIS ONLINE</span>
+                <span id="statusText">ANSLUTER...</span>
             </div>
             <div id="activeUserBadge" style="display:none">IDENTIFIERAD</div>
         </header>
 
-        <!-- Main Camera View -->
         <section class="cam-viewport">
+            <div class="active-cam-container">
+                <div class="active-cam-label" id="activeLabel">ANSLUTER...</div>
+                <div class="cam-id-badge" id="idBadgeMobile">IDENTIFIERAR...</div>
+                <img id="activeCam" src="" crossorigin="anonymous">
+            </div>
+
             <div class="cam-grid">
-                <!-- Zon 1: Ytterdörren -->
-                <div class="cam-box">
-                    <img id="cam0" src="/cam1" alt="Ytterdörren">
-                    <div class="cam-sm-label">🚪 YTTERDÖRREN</div>
-                    <div id="badge_cam1" class="cam-sm-badge">OKÄND PERSON</div>
+                <div class="cam-box active" onclick="switchCam('cam1', 'Ytterdörren')">
+                    <img src="" id="thumb_cam1" crossorigin="anonymous">
+                    <div class="cam-sm-label">🚪 DÖRREN</div>
                 </div>
-                <!-- Zon 2: Infarten -->
-                <div class="cam-box">
-                    <img id="cam1" src="/cam2" alt="Infarten">
+                <div class="cam-box" onclick="switchCam('cam2', 'Infarten')">
+                    <img src="" id="thumb_cam2" crossorigin="anonymous">
                     <div class="cam-sm-label">🚗 INFARTEN</div>
-                    <div id="badge_cam2" class="cam-sm-badge">OKÄND PERSON</div>
                 </div>
-                <!-- Zon 3: Garaget -->
-                <div class="cam-box">
-                    <img id="cam2" src="/cam3" alt="Garaget">
+                <div class="cam-box" onclick="switchCam('cam3', 'Garaget')">
+                    <img src="" id="thumb_cam3" crossorigin="anonymous">
                     <div class="cam-sm-label">🛠️ GARAGET</div>
-                    <div id="badge_cam3" class="cam-sm-badge">OKÄND PERSON</div>
                 </div>
             </div>
         </section>
 
-        <!-- Interaction Zone -->
         <section class="chat-viewport">
             <div id="chatMessages">
                 <div class="msg ai">Redo i mobilen, Andreas. Hur vill du agera?</div>
@@ -141,7 +148,6 @@
                     <input type="text" id="chatInput" placeholder="Prata med JARVIS...">
                     <button class="btn-send" id="sendBtn">📡</button>
                 </div>
-                
                 <div class="quick-actions">
                     <button class="btn-action" onclick="location.href='remote.html'">🖥️ SPEGLA DATORN</button>
                     <button class="btn-action" onclick="toggleGallery()">🖼️ HÄNDELSER</button>
@@ -149,11 +155,9 @@
                     <button class="btn-action" onclick="askAI('Vilka är hemma?')">👥 VEM?</button>
                     <button class="btn-vakt" id="vaktBtn" onclick="toggleVakt()">VAKTLÄGE: AV</button>
                 </div>
-
             </div>
         </section>
 
-        <!-- Gallery Overlay -->
         <div id="galleryModal" class="modal">
             <div class="modal-content">
                 <div class="modal-header">

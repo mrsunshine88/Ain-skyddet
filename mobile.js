@@ -120,6 +120,11 @@ async function initTunnel() {
             const labelEl = document.getElementById('activeLabel');
             if (labelEl) {
                 switchCam(currentZone, labelEl.innerText);
+                
+                // Uppdatera även tumnaglarna
+                document.getElementById('thumb_cam1').src = `${BASE_URL}/cam1?t=${Date.now()}`;
+                document.getElementById('thumb_cam2').src = `${BASE_URL}/cam2?t=${Date.now()}`;
+                document.getElementById('thumb_cam3').src = `${BASE_URL}/cam3?t=${Date.now()}`;
             }
         }
     } catch (e) {
@@ -130,6 +135,11 @@ initTunnel(); // Hämta adressen direkt vid start
 
 // --- Camera Logic ---
 window.switchCam = (id, label) => {
+    if (!BASE_URL) {
+        console.log("switchCam: Väntar på tunnel-adress...");
+        return;
+    }
+
     // --- NYTT: SEKRETESS-KONTROLL ---
     const isAdmin = activeSession && (activeSession.role === 'admin' || activeSession.name === 'Andreas');
     if (id === 'cam0' && !isAdmin) {
@@ -139,11 +149,13 @@ window.switchCam = (id, label) => {
 
     currentZone = id;
     activeCam.src = `${BASE_URL}/${id}?t=${Date.now()}`;
-    activeLabel.innerText = label.toUpperCase();
+    if (label) activeLabel.innerText = label.toUpperCase();
     
     // Update button states
-    document.querySelectorAll('.cam-selector').forEach(btn => btn.classList.remove('active'));
-    event.currentTarget.classList.add('active');
+    document.querySelectorAll('.cam-box').forEach(btn => btn.classList.remove('active'));
+    // Hitta rätt box baserat på ID
+    const box = document.querySelector(`[onclick*="${id}"]`);
+    if (box) box.classList.add('active');
 };
 
 // --- Chat Logic ---
