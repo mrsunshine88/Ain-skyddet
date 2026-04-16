@@ -183,22 +183,32 @@ const server = http.createServer((req, res) => {
     res.writeHead(404); res.end("Not Found");
 });
 
-server.listen(9999, '0.0.0.0', async () => {
-    console.log("JARVIS SERVER REDO: 0.0.0.0:9999");
+async function startTunnel() {
     try {
         const localtunnel = require('localtunnel');
-        // VIKTIGT: Fast subdomain så att länken i mobilen aldrig ändras
-        const tunnel = await localtunnel({ port: 9999, subdomain: 'jarvis-vakt-41990' });
+        const tunnel = await localtunnel({ port: 9999, subdomain: 'jarvis-skydd-2026' });
         
+        tunnel.on('close', () => {
+            console.log("📱 Tunnel stängd. Startar om om 5 sekunder...");
+            setTimeout(startTunnel, 5000);
+        });
+
         tunnel.on('error', (err) => {
-            console.error("📱 Tunnel-fel under körning:", err);
+            console.error("📱 Tunnel-fel:", err);
+            // Ingen omstart här direkt för att undvika loopar, vänta på close
         });
 
         console.log(`📱 JARVIS MOBILÅTKOMST (HTTPS): ${tunnel.url}`);
         syncTunnelToCloud(tunnel.url);
     } catch (e) {
-        console.error("📱 Kunde inte starta tunnel:", e);
+        console.error("📱 Kunde inte starta tunnel. Försöker igen om 10s...", e);
+        setTimeout(startTunnel, 10000);
     }
+}
+
+server.listen(9999, '0.0.0.0', () => {
+    console.log("JARVIS SERVER REDO: 0.0.0.0:9999");
+    startTunnel();
 });
 
 app.on('ready', () => {

@@ -134,7 +134,8 @@
             }
 
             try {
-                const supabase = window.supabase.createClient(SUPABASE_URL, 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5b3psdmdjYW96cGN5ZG14b2x2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU5MzEyMjYsImV4cCI6MjA5MTUwNzIyNn0.GzeERLcJ3n0o0UAtJ4oPMHiNTVoFdOC8bwYqvRtbZLg');
+                // Skapa en egen liten klient ifall globala inte är initierad
+                const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
                 const { data } = await supabase.from('jarvis_settings').select('data').eq('key', 'remote_tunnel').single();
                 
                 if (!data || !data.data.url) {
@@ -142,11 +143,14 @@
                     return;
                 }
 
+                // Extrahera domänen för WebSocket
                 const tunnelUrl = data.data.url.replace('https://', '').replace('http://', '');
-                const ws = new WebSocket(`wss://${tunnelUrl}`); // Port 9999 is proxied by localtunnel
+                
+                // Anslut till WebSocket (Spegling på port 9999)
+                const ws = new WebSocket(`wss://${tunnelUrl}`);
 
                 ws.onopen = () => {
-                    status.innerText = "MIRROR GUARD AKTIV";
+                    status.innerText = "FJÄRRSTYRNING AKTIV";
                     status.style.borderColor = "#00ff88";
                     status.style.color = "#00ff88";
                 };
