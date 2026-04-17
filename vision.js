@@ -13,7 +13,7 @@ export class Vision {
         this.video = videoElement || null;
         this.canvas = canvasElement;
         this.brain = brain;
-        this.visionModel = 'llama3.2-vision';
+        this.visionModel = 'llama3.2-vision:latest';
         this.isOllamaBusy = false;
         this.activeUser = null;
         this.lastObservedUser = "none";
@@ -41,14 +41,17 @@ export class Vision {
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'system', content: "Du är en AI-assistent som observerar personen framför dig. Beskriv kortfattat hur personen verkar må och om de ser ut att vara uppmärksamma på dig. Skriv naturligt och vänligt på svenska." },
-                        { role: 'user', content: "Beskriv personens humör och fokus med en naturlig svensk mening (max 15 ord).", images: [img] }
+                        { role: 'user', content: "Beskriv personens humör och fokus med en naturlig svensk mening (max 15 ord). INSTRUKTION: Skriv naturligt och vänligt på svenska.", images: [img] }
                     ],
+                    options: { keep_alive: "5m", temperature: 0.1, num_predict: 20 },
                     stream: false
                 })
             });
             const data = await res.json();
             let insight = data.message?.content || "";
+
+            // --- SANERING: Ta bort eventuell arabiska/skräptecken ---
+            insight = insight.replace(/[\u0600-\u06FF]/g, '').trim();
 
             // --- BUGGFIX: Tvinga 2:a person (Du istället för Andreas/Han/Hon) ---
             insight = insight.toLowerCase()
@@ -353,7 +356,7 @@ export class Vision {
     // --- NYTT: SMART GUARD VISION ---
     async getSnapshotFromFrigate(eventId, crop = false) {
         if (!eventId) return null;
-        
+
         // --- FAS 1: INITIAL PAUS (1.5 sekunder) ---
         // För att ge Frigate tid att buffra och skriva ner händelse-bilden på hårddisken.
         console.log(`[JARVIS-RETRY] Väntar 1.5s innan första hämtningsförsöket...`);
@@ -368,7 +371,7 @@ export class Vision {
             try {
                 console.log(`[JARVIS-RETRY] Försök ${i}/5 att hämta utklipp: ${url}`);
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 10000); 
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
 
                 const res = await fetch(url, { signal: controller.signal });
                 clearTimeout(timeoutId);
@@ -382,40 +385,18 @@ export class Vision {
                         reader.readAsDataURL(blob);
                     });
                 }
-                
+
                 console.warn(`[JARVIS-RETRY] ⚠️ Försök ${i} misslyckades (Status: ${res.status}). Väntar 1s...`);
             } catch (e) {
                 console.error(`[JARVIS-RETRY] ❌ Nätverksfel vid försök ${i}:`, e.message);
             }
-            
+
             if (i < 5) await new Promise(r => setTimeout(r, 1000));
         }
 
         console.error(`[JARVIS-RETRY] 💀 Gav upp efter 5 försök. Inget utklipp hittades.`);
         return null;
     }
-
-    // --- NYTT: HÄMTA LIVE-BILD FRÅN FRIGATE (Istället för direkt kamera) ---
-    async getLiveSnapshotFromFrigate(cameraName) {
-        if (!cameraName) return null;
-        try {
-            console.log(`[VISION-DIAG] Begär ny bild från Frigate för ${cameraName}...`);
-            const host = window.location.hostname || 'localhost';
-            const url = `http://${host}:5050/api/${cameraName}/latest.jpg`;
-            const res = await fetch(url);
-            if (!res.ok) return null;
-            const blob = await res.blob();
-            return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result);
-                reader.readAsDataURL(blob);
-            });
-        } catch (e) {
-            console.error(`[VISION-DIAG] Kunde inte hämta live-bild för ${cameraName}:`, e);
-            return null;
-        }
-    }
-
 
 
     // --- NYTT: TRÄNA ANSIKTE ---
@@ -453,31 +434,37 @@ export class Vision {
     }
 
     async analyzeIntruder(snap, label, identity = null, camera = "", movementContext = "") {
+        this.isOllamaBusy = true;
         try {
             const labelMap = { "person": "person", "car": "bil", "motorcycle": "motorcykel", "dog": "hund", "cat": "katt" };
             const labelSwe = labelMap[label] || label;
 
-            const promptPerson = `ANALYS: Svara på PERFEKT SVENSKA. Beskriv människan sakligt.\nFORMAT: [Okänd], [Kläder & Färger], [Glasögon: Ja/Nej], [Huvudbonad: Ja/Nej], [Gör vad].\nMAX 15 ORD. Inget flum.`;
-            const promptVehicle = `Svara på SVENSKA. Analysera fordonet OBJEKTIVT. Identifiera märke/modell ENBART om du ser logotypen tydligt. Annars svara endast: [Färg], [Biltyp] (t.ex. 'Blå SUV'). MAX 10 ORD.`;
+            const reportInstructions = `Svara ENDAST med en kort beskrivning på svenska. Ingen inledning, ingen analys, ingen upprepning av mallen. 
 
+FORMAT: 
+[Namn/Okänd] [kille/tjej] med/utan glasögon syns vid [plats]. Personen har [färg] tröja och [färg] byxor.
 
-            let finalPrompt = label === 'person' ? promptPerson : promptVehicle;
-            
-            // --- NYTT: Inkludera namn i AI-instruktionen ---
-            if (label === 'person' && identity && identity !== "Okänd") {
-                // Tvinga AI:n att använda namnet och svara på SVENSKA
-                finalPrompt = `Identifierad: ${identity}. BESKRIV ENLIGT MALL PÅ PERFEKT SVENSKA: [${identity}], [Kläder & Färger], [Glasögon: Ja/Nej], [Huvudbonad: Ja/Nej], [Gör vad].\nVARNING: Svara endast med fakta utifrån bilden. Inget poetiskt 'solsken'. Max 15 ord.`;
-            }
+REGLER:
+- BIL-REGEL: Beskriv bilens färg. Skriv ut märket ENDAST om du kan läsa namnet eller se logotypen tydligt. Om märket inte syns, skriv bara "en [färg] bil". Skriv aldrig ordet "modell okänd".
+- Om namnet är känt (t.ex. Andreas), använd det istället för "Okänd".
+- Beskriv varje detalj ENDAST en gång. Upprepning är förbjudet.
+- Avsluta meningen direkt när du beskrivit kläderna.
+- Skriv max 20 ord. Svara direkt.`;
+
+            const finalPrompt = label === 'person'
+                ? `${reportInstructions}\n\nDATA: Namn: ${identity || 'Okänd'}, Plats: ${camera || 'Utomhus'}. Utför analys nu.`
+                : `${reportInstructions}\n\nDATA: Ägare: ${identity || 'Okänd'}, Regnummer: ${identity || 'Okänt'}, Plats: ${camera || 'Utomhus'}. Utför analys nu.`;
+
 
             // Robust bildrensning (Hämta ren base64)
-            const img = snap.includes(',') ? snap.split(',')[1] : snap;
+            const img = (typeof snap === 'string' && snap.includes(',')) ? snap.split(',')[1] : snap;
             if (!img) return { description: "Bildfel: Kunde inte avkoda fotot.", classification: "Okänd", threatLevel: 1 };
 
             console.log(`[VISION-DIAG] Skickar analys till GPU (Modell: ${this.visionModel})...`);
-            
+
             const host = window.location.hostname || '127.0.0.1';
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout för llama3.2-vision
+            const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout för moondream
 
             const res = await fetch(`http://${host}:11434/api/chat`, {
                 method: 'POST',
@@ -485,44 +472,23 @@ export class Vision {
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'system', content: 'Du är en säkerhetsvakt som alltid svarar på kortfattad svenska. Inga engelska ord.' },
-                        { role: 'user', content: finalPrompt, images: [img] }
+                        { role: 'user', content: `${reportInstructions}\n\nDATA: Namn: ${identity || 'Okänd'}, Plats: ${camera || 'Utomhus'}. Utför analys nu.`, images: [img] }
                     ],
-                    options: {
-                        num_predict: 80,
-                        temperature: 0.1,
-                        repeat_penalty: 1.2,
-                        top_p: 0.1
-                    },
                     stream: false
                 }),
                 signal: controller.signal
             });
-            
+
             clearTimeout(timeoutId);
             const data = await res.json();
-            const content = data.message?.content || "";
+            const content = data.message?.content || "Analys misslyckades.";
 
-            console.log(`[VISION-DIAG] GPU Klar! Svar: ${content}`);
-
-            // Analysera innehåll för logik efteråt
-            let classification = label === "person" ? "Människa" : "Fordon";
-            let threatLevel = 1;
-            let isChild = content.toLowerCase().includes("barn") || content.toLowerCase().includes("liten person");
-
-            if (isChild) classification = "Barn";
-            if (content.toLowerCase().includes("mask") || content.toLowerCase().includes("bryta") || content.toLowerCase().includes("smid") || content.toLowerCase().includes("hot")) threatLevel = 3;
-
-            return {
-                description: content,
-                classification: classification,
-                isChild: isChild,
-                threatLevel: threatLevel,
-                isAccident: content.toLowerCase().includes("marken") || content.toLowerCase().includes("skadad")
-            };
+            return { description: content, classification: "Bevakning", threatLevel: 1 };
         } catch (e) {
             console.error("[VISION-DIAG] VLM-Beskrivning misslyckades:", e);
             return { description: "Analys misslyckades på grund av tekniskt fel.", classification: "Okänd", threatLevel: 1 };
+        } finally {
+            this.isOllamaBusy = false;
         }
     }
 
@@ -532,7 +498,7 @@ export class Vision {
         try {
             const rawBase64 = base64Image.replace(/^data:image\/jpeg;base64,/, "");
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 45000);
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
 
             // NEUTRALISERAD SYSTEM-PROMPT (För att undvika AI-vägran)
             const systemPrompt = "Du är en assistent som beskriver bilder objektivt på svenska. Titta noga på bilden och svara kortfattat på användarens fråga. Beskriv färger, former och handlingar utan att nämna övervakning eller säkerhet.";
@@ -544,17 +510,21 @@ export class Vision {
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: questionText, images: [rawBase64] }
+                        { role: 'user', content: `INSTRUKTION: Svara på svenska. ${questionText}`, images: [rawBase64] }
                     ],
-                    options: { num_predict: 250, temperature: 0.0 },
+                    options: { num_predict: 250, temperature: 0.0, keep_alive: "5m" },
                     stream: false
                 }),
                 signal: controller.signal
             });
             clearTimeout(timeoutId);
             const data = await res.json();
-            return data.message?.content || "";
+            let content = data.message?.content || "";
+
+            // --- SANERING: Ta bort eventuell arabiska ---
+            content = content.replace(/[\u0600-\u06FF]/g, '').trim();
+
+            return content;
         } catch (e) {
             console.error("VQA-fråga misslyckades:", e);
             return "";
@@ -592,24 +562,30 @@ export class Vision {
     async getLatestPlate(cameraName) {
         if (!cameraName) return null;
         try {
-            console.log(`[VISION-DIAG] Frågar Frigate om metadata för ${cameraName}...`);
+            console.log(`[VISION-DIAG] Aktiv sökning efter regnummer vid ${cameraName}...`);
             const host = window.location.hostname || 'localhost';
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout för metadata
 
-            const res = await fetch(`http://${host}:5050/api/events?camera=${cameraName}&limit=1&has_sub_label=1`, { 
-                signal: controller.signal 
-            });
-            clearTimeout(timeoutId);
+            // 1. Kolla först om det finns ett AKTIVT objekt med en skylt just nu
+            const activeRes = await fetch(`http://${host}:5050/api/events?camera=${cameraName}&active=1&has_sub_label=1&limit=1`);
+            if (activeRes.ok) {
+                const activeEvents = await activeRes.json();
+                if (activeEvents.length > 0 && activeEvents[0].sub_label) {
+                    console.log(`[VISION-DIAG] Hittade aktiv skylt: ${activeEvents[0].sub_label}`);
+                    return activeEvents[0].sub_label;
+                }
+            }
 
-            if (!res.ok) return null;
-            const events = await res.json();
-            if (events && events.length > 0 && events[0].sub_label) {
-                return events[0].sub_label;
+            // 2. Fallback: Kolla det senaste avslutade eventet med skylt
+            const res = await fetch(`http://${host}:5050/api/events?camera=${cameraName}&limit=1&has_sub_label=1`);
+            if (res.ok) {
+                const events = await res.json();
+                if (events.length > 0 && events[0].sub_label) {
+                    return events[0].sub_label;
+                }
             }
             return null;
         } catch (e) {
-            console.error(`[VISION-DIAG] Kunde inte hämta metadata från Frigate (Timeout?):`, e);
+            console.error(`[VISION-DIAG] Kunde inte hämta LPR-metadata:`, e);
             return null;
         }
     }

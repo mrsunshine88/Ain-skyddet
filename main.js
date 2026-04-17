@@ -284,24 +284,14 @@ ipcMain.handle('read-profile-image', async (event, { name, filename }) => {
 });
 
 ipcMain.handle('save-face-image', async (event, { name, base64 }) => {
-    const nameLower = name.toLowerCase(); // Tvinga till gemener för Docker-kompatibilitet
-    const dir = path.join(PROFILE_DIR, nameLower);
+    const dir = path.join(PROFILE_DIR, name);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     
-    const filename = `${nameLower}_${Date.now()}.jpg`;
+    const filename = `${name}_${Date.now()}.jpg`;
     const p = path.join(dir, filename);
     const data = base64.replace(/^data:image\/\w+;base64,/, "");
     fs.writeFileSync(p, data, { encoding: 'base64' });
     
-    // --- NYTT: AUTO-TRÄNA DOUBLE TAKE ---
-    try {
-        const fetch = require('node-fetch');
-        // Vi tvingar Double Take att läsa in den nya bilden direkt
-        fetch(`http://localhost:2323/api/train/${nameLower}`, { method: 'POST' })
-            .then(() => logToWindow(`[DOUBLE-TAKE] Synkronisering påbörjad för ${nameLower}`, 'info'))
-            .catch(e => console.warn("Double Take synk misslyckades (kanske offline):", e.message));
-    } catch (e) {}
-
     return { success: true, filename };
 });
 
@@ -396,13 +386,12 @@ function fetchLatestSubLabel(eventId, callback) {
 function resolveIdentity(rawId) {
     if (!rawId || rawId === "unknown" || rawId === "Okänd") return "Okänd";
     
-    // --- NYTT: NAMN-TVÄTT (Fixar Double Take stavfel) ---
-    const id = rawId.toLowerCase();
-    if (id === 'andraes') return 'Andreas';
-    if (id === 'andreas') return 'Andreas';
-    if (id === 'lukas') return 'Lukas';
+    // --- NAMN-TVÄTT (Endast kända alias, ingen tvingande formatering) ---
+    if (rawId === 'andraes') return 'andreas';
+    if (rawId === 'andreas') return 'andreas';
+    if (rawId === 'lukas') return 'lukas';
     
-    return rawId; // Returera originalet om ingen tvätt behövs
+    return rawId;
 }
 
 mqttClient.on('connect', () => {
@@ -446,61 +435,71 @@ mqttClient.on('message', (topic, message) => {
         try {
             const review = JSON.parse(message.toString());
             const data = review.after || review; 
+            
+            // --- RIDDAR-PROTOKOLLET: STRIKT BRUS-FILTER (FIX) ---
+            // Vi lyssnar ENDAST om Frigate har bestämt 100% att det är en person eller bil (alert).
+            if (data.severity !== 'alert') return;
+            const objects = data.data?.objects || [];
+            if (!objects.includes('person') && !objects.includes('car')) return;
+
             const objId = data.id;
             const cam = data.camera;
             const eventKey = `${cam}_${objId}`;
             
             if (!processedEvents.has(eventKey)) {
                 processedEvents.set(eventKey, true);
-                setTimeout(() => processedEvents.delete(eventKey), 300000); 
+                setTimeout(() => processedEvents.delete(eventKey), 30000); // 30s lås
+                
+                // --- PANG-LÖSNINGEN: KNUFFEN TILL BUDBÄRAREN ---
+                // Vi talar om för Double-Take att det finns en person/bil att identifiera.
+                const DOUBLE_TAKE_HOST = '127.0.0.1';
+                const retryLoop = setInterval(async () => {
+                    if (!processedEvents.has(eventKey)) { clearInterval(retryLoop); return; }
+                    try {
+                        const res = await fetch(`http://${DOUBLE_TAKE_HOST}:32168/api/recognize?id=${objId}`);
+                        if (res.ok) {
+                            console.log(`[PANG-LINK] Knuffat Double-Take för ID: ${objId}`);
+                            clearInterval(retryLoop);
+                        }
+                    } catch (e) {
+                        console.log(`[PANG-LINK] Väntar på att Double-Take ska vakna...`);
+                    }
+                }, 1000);
+                setTimeout(() => clearInterval(retryLoop), 15000); // Ge upp efter 15s
 
                 const eventId = data.data?.detections?.[0] || objId; 
-                const label = data.data?.objects?.[0] || 'rörelse';
+                const label = objects[0] || 'rörelse';
 
-                // --- ÅTERSTÄLLD VÄNTELOGIK (1.5s + 5x1s loop) ---
-                console.log(`[JARVIS-SYNC] Person upptäckt. Väntar 1.5s innan namn-loop startar...`);
-                
-                setTimeout(() => {
-                    let attempts = 0;
-                    const maxAttempts = 6; // Återställt till snabb-läge (PANG-FIX Aktiv)
+                // Reaktiv identitet (väntar på att Double-Take ska skicka tillbaka namnet via MQTT)
+                const checkIdentity = () => {
+                    const directMatch = latestDoubleTakeMatches.get(objId) || latestDoubleTakeMatches.get(eventId);
+                    const identity = resolveIdentity(directMatch || data.sub_label || "Okänd");
+                    
+                    const alarmText = identity === "Okänd" ? `En ${label} har upptäckts` : `${identity} (${label}) har setts`;
+                    logToWindow(`[PANG-LINK] Reaktiv händelse: ${alarmText} vid ${cam}`, 'info');
 
-                    const retryLoop = setInterval(() => {
-                        attempts++;
-                        
-                        // --- PANG-LÖSNINGEN: Kolla direkt i minnet ---
-                        const directMatch = latestDoubleTakeMatches.get(objId) || latestDoubleTakeMatches.get(eventId);
-                        const identity = resolveIdentity(directMatch || "Okänd");
-                        
-                        console.log(`[PANG-LINK] Försök ${attempts}/8: Identitet (direkt från källa) = ${identity}`);
+                    broadcastToMobile({
+                        type: 'notification',
+                        camera: cam,
+                        text: alarmText,
+                        identity: identity,
+                        time: new Date().toLocaleTimeString()
+                    });
 
-                        if (identity !== "Okänd" || attempts >= 8) {
-                            clearInterval(retryLoop);
-                            
-                            const alarmText = identity === "Okänd" ? `En ${label} har upptäckts` : `${identity} (${label}) har setts`;
-                            logToWindow(`[PANG-LINK] Info mottagen: ${alarmText} vid ${cam}`, 'info');
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('frigate-event', {
+                            id: eventId, 
+                            camera: cam,
+                            identity: identity,
+                            label: label,
+                            raw: review,
+                            alarmText: alarmText
+                        });
+                    }
+                };
 
-                            // Skicka även till Mobil-appen
-                            broadcastToMobile({
-                                type: 'notification',
-                                camera: cam,
-                                text: alarmText,
-                                identity: identity,
-                                time: new Date().toLocaleTimeString()
-                            });
-
-                            if (mainWindow && !mainWindow.isDestroyed()) {
-                                mainWindow.webContents.send('frigate-event', {
-                                    id: eventId, 
-                                    camera: cam,
-                                    identity: identity,
-                                    label: label,
-                                    raw: review,
-                                    alarmText: alarmText
-                                });
-                            }
-                        }
-                    }, 1000);
-                }, 1500);
+                // Vi väntar 2 sekunder på att Double-Take ska hinna identifiera innan vi skickar till UI
+                setTimeout(checkIdentity, 2000);
             }
         } catch (e) {
             console.error("MQTT: Fel vid parsing av Frigate-review:", e);

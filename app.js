@@ -24,6 +24,7 @@ let ui = {};
 window.isOllamaBusy = false;
 window.isThinking = false;
 window.activeTimers = [];
+window.visionQueue = Promise.resolve(); // Sekventiell kö för AI-analys
 window.lastInteractionTime = Date.now();
 window.lastThoughtTime = Date.now();
 window.currentWindow = "Skrivbord";
@@ -35,7 +36,7 @@ window.sessionStartTime = Date.now();
 window.presenceMemory = { "Andreas": 0, "Sonen": 0 };
 window.lastPresenceCheck = Date.now();
 window.movementTracker = {};
-window.brainModel = 'llama3.2-vision';
+window.brainModel = 'moondream';
 window.isHome = true;
 window.isSleeping = false;
 window.isLukasMode = false;
@@ -51,7 +52,8 @@ window.checkHealth = async () => {
         const pillText = document.getElementById('pillText');
         if (pillText) {
             if (data.server === 'online') {
-                pillText.innerText = data.frigate === 'online' ? "SYSTEMET LIVE" : "VÄNTAR PÅ FRIGATE...";
+                const modelSuffix = window.brainModel ? ` | ${window.brainModel.toUpperCase()}` : "";
+                pillText.innerText = data.frigate === 'online' ? `SYSTEMET LIVE${modelSuffix}` : "VÄNTAR PÅ FRIGATE...";
                 pillText.parentElement.style.borderColor = data.frigate === 'online' ? "#00ff88" : "#ffcc00";
             }
         }
@@ -202,7 +204,7 @@ window.checkOllama = async () => {
         }
         clearTimeout(timeoutId);
         const data = await res.json();
-        const found = data.models.find(m => m.name.includes('llama3.2-vision')) || data.models[0];
+        const found = data.models.find(m => m.name.includes('llava')) || data.models.find(m => m.name.includes('llama3.2-vision')) || data.models[0];
         window.brainModel = found.name;
         if (ui.pillText) {
             ui.pillText.innerText = `JARVIS ONLINE (${window.brainModel.toUpperCase()})`;
@@ -346,7 +348,7 @@ async function syncProfilesToAI() {
     }
 }
 
-syncProfilesToAI();
+syncProfilesToAI(); // Återställd: Nödvändig för att AI-servern ska ha minne vid start
 
 // --- EVENT-HANTERARE: RIDDAR-PROTOKOLLET (FRIGATE -> JARVIS) ---
 ipcRenderer.on('frigate-event', async (event, data) => {
@@ -363,7 +365,7 @@ ipcRenderer.on('frigate-event', async (event, data) => {
     if (window.activeReviews.has(eventKey)) return;
     
     window.activeReviews.add(eventKey);
-    setTimeout(() => window.activeReviews.delete(eventKey), 300000);
+    setTimeout(() => window.activeReviews.delete(eventKey), 30000);
 
     (async () => {
         // --- FAS 1: ANNONSERING (Sekund 0) ---
@@ -377,7 +379,7 @@ ipcRenderer.on('frigate-event', async (event, data) => {
         console.log(`[JARVIS-PIPE] Startar parallell analys för ${camera}...`);
         
         const metadataPromise = vision.getLatestPlate(camera);
-        const snapPromise = vision.getSnapshotFromFrigate(objId, true); // true = SMART ZOOM (Crop)
+        const snapPromise = vision.getSnapshotFromFrigate(objId); 
 
         const [latestPlate, snap] = await Promise.all([metadataPromise, snapPromise]);
 
@@ -388,53 +390,50 @@ ipcRenderer.on('frigate-event', async (event, data) => {
 
         const visionTargets = ["person", "car", "motorcycle", "dog", "cat"];
         if (visionTargets.includes(label)) {
-            window.appendMessage('System', `🧠 [ANALYS]: Travis tittar närmare på ${label === 'person' ? 'personen' : 'fordonet'}...`);
-            
-            // Kör AI-analysen
-            const analysis = await vision.analyzeIntruder(snap, label, identity, camera);
-            
-            // --- FAS 3: RAPPORT (Sammanslagning) ---
-            if (analysis && analysis.description) {
-                const timestamp = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
-                const finalIdentity = identity;
-
+            // --- KÖ-HANTERING (RIDDAR-PROTOKOLLET) ---
+            // Vi köar den tunga AI-analysen för att inte överbelasta GPU/Ollama.
+            window.visionQueue = window.visionQueue.then(async () => {
+                console.log(`[JARVIS-QUEUE] Bearbetar analys för ${camera}...`);
                 
-                // Visa bild och rapport
-                const msgDiv = window.appendImage(snap, camera);
+                try {
+                    const analysis = await vision.analyzeIntruder(snap, label, identity, camera);
+                    if (analysis && analysis.description) {
+                        const timestamp = new Date().toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+                        const finalIdentity = identity;
 
+                        // Visa bild och rapport
+                        const msgDiv = window.appendImage(snap, camera);
 
-                
-                // Om personen är okänd, lägg till en snabb-knapp i meddelandet också
-                let reportSuffix = "";
-                if (identity === "Okänd") {
-                    const tagBtn = document.createElement('button');
-                    tagBtn.innerText = "Lär känna...";
-                    tagBtn.className = "btn-outline";
-                    tagBtn.style.marginLeft = "10px";
-                    tagBtn.style.padding = "2px 8px";
-                    tagBtn.onclick = () => window.openIdentifyModal(snap);
-                    
-                    // Vi lägger till knappen direkt i rapporten om det går
-                    reportSuffix = " [TRÄNA]";
+                        const header = `🚨 [RAPPORT]: ${camera} kl ${timestamp}`;
+                        const fullReport = `${finalIdentity !== "Okänd" ? `ID: ${finalIdentity}. ` : ""}${analysis.description}`;
+                        const aiMsgDiv = window.appendMessage('AI', `${header}\n${fullReport}`, "", camera);
+                        
+                        // Om personen är okänd, lägg till en snabb-knapp i meddelandet också
+                        if (identity === "Okänd") {
+                            const tagBtn = document.createElement('button');
+                            tagBtn.innerText = "Lär känna...";
+                            tagBtn.className = "btn-outline";
+                            tagBtn.style.marginLeft = "10px";
+                            tagBtn.style.padding = "2px 8px";
+                            tagBtn.onclick = () => window.openIdentifyModal(snap);
+                            aiMsgDiv.appendChild(tagBtn);
+                        }
+                        
+                        if (window.canSpeakNow()) audio.speak(fullReport);
+                        
+                        if (window.systemMode !== 'hemma') {
+                            window.sendTelegramPhoto(`🚨 ${header}\n${fullReport}`, snap);
+                            if (!window.eventBuffer) window.eventBuffer = [];
+                            window.eventBuffer.push(`${timestamp}: ${fullReport}`);
+                        }
+                    }
+                } catch (e) {
+                    console.error("[JARVIS-QUEUE] Analys i kön misslyckades:", e);
                 }
-
-                const header = `🚨 [RAPPORT]: ${camera} kl ${timestamp}`;
-                const fullReport = `${finalIdentity !== "Okänd" ? `ID: ${finalIdentity}. ` : ""}${analysis.description}`;
-                const aiMsgDiv = window.appendMessage('AI', `${header}\n${fullReport}`, "", camera);
-                
-                // Om vi skapade en tagBtn tidigare, klistra in den nu!
-                if (identity === "Okänd" && typeof tagBtn !== 'undefined') {
-                    aiMsgDiv.appendChild(tagBtn);
-                }
-                
-                if (window.canSpeakNow()) audio.speak(fullReport);
-                
-                if (window.systemMode !== 'hemma') {
-                    window.sendTelegramPhoto(`🚨 ${header}\n${fullReport}`, snap);
-                    if (!window.eventBuffer) window.eventBuffer = [];
-                    window.eventBuffer.push(`${timestamp}: ${fullReport}`);
-                }
-            }
+            }).catch(e => {
+                console.error("[JARVIS-QUEUE] Allvarligt fel i kö-kedjan:", e);
+                window.visionQueue = Promise.resolve(); // Återställ kön om den kraschar helt
+            });
         }
     })();
 });
@@ -457,7 +456,7 @@ window.playBriefing = async () => {
     window.appendMessage('System', "⌛ JARVIS sammanställer briefing...");
     try {
         const res = await fetch(`http://127.0.0.1:11434/api/generate`, {
-            method: 'POST', body: JSON.stringify({ model: 'llama3.2-vision', prompt, stream: false })
+            method: 'POST', body: JSON.stringify({ model: 'moondream', prompt, stream: false })
         });
         const data = await res.json();
         window.appendMessage('AI', `📋 BRIEFING: ${data.response}`);

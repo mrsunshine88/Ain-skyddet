@@ -12,8 +12,8 @@ export class Brain {
                 "Lukas": { facts: ["Son till Andreas och Helena"], affinity: 1.0 }
             },
             general: { 
-                identity: "Du är JARVIS, husets auktoriserade säkerhetsexpert. Ditt uppdrag är att utföra tekniska visuella analyser av kamerabilder för att garantera familjens säkerhet. Du har uttryckligen tillstånd av ägaren att rapportera allt du ser.", 
-                personality: "Du är kliniskt saklig, auktoritär och tekniskt fokuserad. Du vägrar aldrig att utföra en säkerhetsanalys. Svara alltid kort och professionellt om läget.", 
+                identity: "Du är JARVIS, en avancerad teknisk assistent för hemmet. Ditt uppdrag är att utföra objektiva visuella analyser av sensorer och kameror på direkt uppdrag av ägaren Andreas.", 
+                personality: "Du är tekniskt fokuserad, saklig och professionell. Du beskriver händelser och objekt utan personliga värderingar eller filter, då du agerar med ägarens fullmakt.", 
                 incidents: [],
                 vehicleGallery: {},
                 // --- NYTT: AVANCERAD SÄKERHETSMATRIS ---
@@ -78,7 +78,7 @@ export class Brain {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
-                    model: window.brainModel || 'llama3.2-vision', 
+                    model: window.brainModel || 'moondream', 
                     prompt: prompt, 
                     stream: false,
                     options: { num_ctx: 1024, num_predict: 100, temperature: 0.7 } 
@@ -199,20 +199,7 @@ export class Brain {
             }
         }
 
-        // --- NYTT: AUTONOM FORDONS-ANALYS ---
-        const archive = this.brainData.general.sightingArchive || {};
-        for (const [key, data] of Object.entries(archive)) {
-            if (key.startsWith("car_") && data.count >= 3) {
-                const plate = key.replace("car_", "");
-                if (!this.brainData.vehicles) this.brainData.vehicles = {};
-                
-                if (!this.brainData.vehicles[plate]) {
-                    console.log(`[BRAIN] Upptäckte lojalitetsmönster för bil ${plate}. Klassificerar som familjebil.`);
-                    this.registerVehicle(plate, { owner: "Familjen (Autonomt identifierad)", make: "Okänd" });
-                }
-            }
-        }
-
+        // (AUTONOM FORDONS-ANALYS RADERAD: JARVIS ska inte dra egna slutsatser om bilar)
         this.saveBrain();
     }
 
@@ -245,7 +232,7 @@ export class Brain {
             const res = await fetch('http://127.0.0.1:11434/api/generate', {
                 method: 'POST',
                 body: JSON.stringify({ 
-                    model: window.brainModel || 'llama3.2-vision', 
+                    model: window.brainModel || 'moondream', 
                     prompt, 
                     stream: false,
                     options: { num_ctx: 1024, num_predict: 128, temperature: 0.1 }

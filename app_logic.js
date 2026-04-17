@@ -90,13 +90,13 @@ export function initLogic(ui, brain, vision, audio) {
             return;
         }
 
-        // --- VQA & SYNAUTOMATION (Realtids-scann via Frigate) ---
+        // --- VQA & SYNAUTOMATION (Realtids-scann via Frigate - Rule 7) ---
         const isQueryingOutside = /är (de|det) (nån|någon|något|några)/i.test(lowerText) || 
                                   /nån (ute|utanför|där)/i.test(lowerText) ||
                                   /är de lugnt/i.test(lowerText) ||
                                   /ser du (nåt|något|nån|någon)/i.test(lowerText) ||
                                   /(vad händer|titta|visa) (vid|på|ute|utanför)/i.test(lowerText) ||
-                                  /(bilen|trappen|vägen|infarten|garaget|grinden|staketet)/i.test(lowerText);
+                                  /(bilen|trappen|vägen|infarten|garaget|grinden|staketet|regnummer|skylt|vem står)/i.test(lowerText);
 
         if (isQueryingOutside) {
             window.appendMessage('System', `📡 Utför en aktiv genomsökning av alla zoner...`);
@@ -104,7 +104,7 @@ export function initLogic(ui, brain, vision, audio) {
                 // --- NYTT: Supersmart AI-Kameraväxel ---
                 let targetCams = [];
                 // 1. Snabb-fallback (Keywords för hastighet)
-                if (lowerText.includes("bil") || lowerText.includes("infart") || lowerText.includes("väg")) targetCams = ["Infarten"];
+                if (lowerText.includes("bil") || lowerText.includes("infart") || lowerText.includes("väg") || lowerText.includes("skylt") || lowerText.includes("regnummer")) targetCams = ["Infarten"];
                 else if (lowerText.includes("dörr") || lowerText.includes("trapp")) targetCams = ["Ytterdorren"];
                 else if (lowerText.includes("garaget")) targetCams = ["Garaget"];
                 else if (lowerText.includes("ute") || lowerText.includes("lugnt") || lowerText.includes("tomten")) targetCams = ["Ytterdorren", "Infarten", "Garaget"];
@@ -114,7 +114,7 @@ export function initLogic(ui, brain, vision, audio) {
                     const intentPrompt = `Givet frågan: "${text}". Vilka kameror är relevanta? (Ytterdorren, Infarten, Garaget). Svara ENDAST med namnen separerade med komma.`;
                     const intentRes = await fetch('http://127.0.0.1:11434/api/generate', {
                         method: 'POST',
-                        body: JSON.stringify({ model: 'llama3.2-vision', prompt: intentPrompt, stream: false, options: { num_predict: 20, temperature: 0.1 } })
+                        body: JSON.stringify({ model: 'moondream', prompt: intentPrompt, stream: false, options: { num_predict: 20, temperature: 0.1 } })
                     });
                     const intentData = await intentRes.json();
                     targetCams = intentData.response.split(',').map(n => n.trim()).filter(n => ["Ytterdorren", "Infarten", "Garaget"].includes(n));
@@ -126,45 +126,32 @@ export function initLogic(ui, brain, vision, audio) {
 
                 let multiContext = [];
                 for (const camName of targetCams) {
-                    const snap = await vision.getLiveSnapshotFromFrigate(camName);
+                    const snap = await vision.getSnapshotFromFrigate(camName);
                     if (snap) {
-                        // --- NYTT: HÄMTA METADATA FRÅN FRIGATE (Regnummer) ---
-                        let metadataLabel = "";
-                        if (lowerText.includes("bil") || lowerText.includes("infart") || lowerText.includes("vem")) {
-                            const plate = await vision.getLatestPlate(camName);
-                            if (plate) {
-                                // Slå upp ägare i brain.json
-                                const identity = typeof window.resolveIdentity === 'function' ? window.resolveIdentity(plate) : plate;
-                                metadataLabel = `[FRIGATE-INFO]: Senast identifierade fordon vid denna plats: ${identity} (${plate}). `;
-                                console.log(`[LOGIC-DIAG] Hittade metadata för ${camName}: ${identity}`);
-                            }
-                        }
-
-                        // Visa bilden direkt för användaren
                         window.appendImage(snap, camName);
-                        
-                        // Använd en helt neutral prompt för ögonen för att undvika moral-vägran
                         const aiReply = await brain.getOllamaResponse(window.brainModel, [
-                            { role: 'system', content: `Du är en objektiv visuell sensor. 
-OM DU SER MÄNNISKOR: Använd formatet "SIGNALEMENT". Fokusera på kroppsbyggnad, kläder och särdrag.
-OM DU SER FORDON: Använd formatet "FORDONSRAPPORT". Fokusera på typ, färg och position.
-${metadataLabel ? `INFO FRÅN FRIGATE: ${metadataLabel}. Använd denna info för att bekräfta vem bilen tillhör.` : ""}
-ALLMÄN REGEL: Svara kortfattat och kliniskt.` },
-                            { role: 'user', content: `Vad ser du på bilden från ${camName}?`, images: [snap.split(',')[1]] }
+                            { role: 'user', content: `INSTRUKTION: Svara på svenska. Beskriv vad som syns på bilden från ${camName}:`, images: [snap.split(',')[1]] }
                         ]);
                         multiContext.push(`${camName}: ${aiReply}`);
                     }
                 }
 
-                // 3. Generera den slutgiltiga "fina rapporten"
-                const finalPrompt = `Användaren frågar: "${text}".\nJag har skannat kamerorna och sett följande faktiska observationer:\n${multiContext.join("\n")}\n\nSkriv nu en kort, lugnande och professionell säkerhetsrapport till Andreas. Fokusera på säkerhetsläget. Om det är lugnt, bekräfta det direkt.`;
-                const finalReply = await brain.getOllamaResponse(window.brainModel, [{ role: 'user', content: finalPrompt }]);
+                const finalReply = await brain.getOllamaResponse(window.brainModel, [
+                    { role: 'user', content: `Här är observationer:
+${multiContext.join("\n")}
+
+INSTRUKTION: Sammanställ en kortfattad rapport på svenska enligt dessa mallar:
+MALL PERSON: [Namn/Okänd] [kille/tjej] [med/utan] glasögon syns vid [plats]. Personen bär [färg] överdel och [färg] underdel.
+MALL BIL: [Ägare]s [Färg] [Märke] [Regnummer] syns vid [plats].
+
+Regel: Svara endast med den ifyllda mallen. Inga listor.` }
+                ]);
                 
                 window.appendMessage('AI', finalReply);
                 if (window.canSpeakNow()) audio.speak(finalReply);
             } catch (e) { 
-                console.error("Verifieringsfel:", e); 
-                window.appendMessage('AI', "Mina ögon (kamerorna) svarar inte just nu, så jag kan inte bekräfta säkerheten. Jag föredrar att vara tyst framför att gissa.");
+                console.error("VQA-fel:", e); 
+                window.appendMessage('AI', "Kunde inte kontakta sensorerna just nu.");
             }
             window.isThinking = false;
             return;
@@ -205,19 +192,6 @@ ALLMÄN REGEL: Svara kortfattat och kliniskt.` },
             window.isThinking = false;
             // Bakgrundsuppgift: Extrahera fakta från samtalet
             brain.extractAndStoreFacts(vision.activeUser || "Andreas", text, aiMsgDiv.innerText);
-
-            // --- NYTT: PROAKTIV SOCIAL FRÅGA (Efter 5 sekunder) ---
-            if (window.lastFriendSnap && !window.hasAskedAboutFriend) {
-                setTimeout(() => {
-                    if (!window.isThinking) { 
-                        const person = window.lastFriendSeenWith || "någon i familjen";
-                        const msg = `Jag såg att ${person} umgicks med en person tidigare som jag inte känner igen. Ska jag spara bilden som en betrodd vän?`;
-                        window.appendMessage('AI', msg);
-                        audio.speak(msg);
-                        window.hasAskedAboutFriend = true; 
-                    }
-                }, 5000);
-            }
         }
     };
 
