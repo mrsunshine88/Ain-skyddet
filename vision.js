@@ -13,7 +13,7 @@ export class Vision {
         this.video = videoElement || null;
         this.canvas = canvasElement;
         this.brain = brain;
-        this.visionModel = 'llama3.2-vision';
+        this.visionModel = 'llama3.2-vision:latest';
         this.isOllamaBusy = false;
         this.activeUser = null;
         this.lastObservedUser = "none";
@@ -439,21 +439,33 @@ export class Vision {
             const labelMap = { "person": "person", "car": "bil", "motorcycle": "motorcykel", "dog": "hund", "cat": "katt" };
             const labelSwe = labelMap[label] || label;
 
-            const reportInstructions = `Svara ENDAST med en kort beskrivning på svenska. Ingen inledning, ingen analys, ingen upprepning av mallen. 
+            // Separata instruktioner för person vs bil
+            const personInstructions = `BESKRIV ENDAST OM DU SER EN PERSON. Om ingen person syns, skriv "Ingen person syns".
 
-FORMAT: 
-[Namn/Okänd] [kille/tjej] med/utan glasögon syns vid [plats]. Personen har [färg] tröja och [färg] byxor.
+FORMAT: [Namn/Okänd] [kille/tjej] med/utan glasögon syns vid [plats]. Personen har [färg] tröja och [färg] byxor.
 
 REGLER:
-- BIL-REGEL: Beskriv bilens färg. Skriv ut märket ENDAST om du kan läsa namnet eller se logotypen tydligt. Om märket inte syns, skriv bara "en [färg] bil". Skriv aldrig ordet "modell okänd".
-- Om namnet är känt (t.ex. Andreas), använd det istället för "Okänd".
-- Beskriv varje detalj ENDAST en gång. Upprepning är förbjudet.
-- Avsluta meningen direkt när du beskrivit kläderna.
-- Skriv max 20 ord. Svara direkt.`;
+- Använd namnet från DATA om det är känt (t.ex. Andreas)
+- Om ingen person syns, skriv "Ingen person syns"
+- Beskriv ENDAST det du faktiskt ser
+- Max 15 ord`;
+
+            const carInstructions = `BESKRIV ENDAST BILEN. Om ingen bil syns, skriv "Ingen bil syns".
+
+FORMAT: [Ägare/Namn] en [färg] bil. [Märke ENDAST om namn/logotyp syns tydligt].
+
+REGLER:
+- Använd ägare från DATA om det är känt (t.ex. Andreas bil)
+- Om ingen bil syns, skriv "Ingen bil syns"
+- Skriv aldrig "modell okänd"
+- Max 10 ord`;
+
+            // Välj rätt instruktioner baserat på label
+            const reportInstructions = label === 'person' ? personInstructions : carInstructions;
 
             const finalPrompt = label === 'person'
-                ? `${reportInstructions}\n\nDATA: Namn: ${identity || 'Okänd'}, Plats: ${camera || 'Utomhus'}. Utför analys nu.`
-                : `${reportInstructions}\n\nDATA: Ägare: ${identity || 'Okänd'}, Regnummer: ${identity || 'Okänt'}, Plats: ${camera || 'Utomhus'}. Utför analys nu.`;
+                ? `${reportInstructions}\n\nDATA: Namn: ${identity || 'Okänd'}, Plats: ${camera || 'Utomhus'}. Analysera bilden.`
+                : `${reportInstructions}\n\nDATA: Ägare: ${identity || 'Okänd'}, Plats: ${camera || 'Utomhus'}. Analysera bilden.`;
 
 
             // Robust bildrensning (Hämta ren base64)
@@ -472,15 +484,8 @@ REGLER:
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'system', content: 'Du är en säkerhetsvakt som alltid svarar på kortfattad svenska. Inga engelska ord.' },
                         { role: 'user', content: finalPrompt, images: [img] }
                     ],
-                    options: {
-                        num_predict: 80,
-                        temperature: 0.1,
-                        repeat_penalty: 1.2,
-                        top_p: 0.1
-                    },
                     stream: false
                 }),
                 signal: controller.signal

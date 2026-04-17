@@ -383,14 +383,12 @@ function fetchLatestSubLabel(eventId, callback) {
     }).on('error', () => callback(null));
 }
 
+
 function resolveIdentity(rawId) {
     if (!rawId || rawId === "unknown" || rawId === "Okänd") return "Okänd";
-    
-    // --- NAMN-TVÄTT (Endast kända alias, ingen tvingande formatering) ---
-    if (rawId === 'andraes') return 'andreas';
-    if (rawId === 'andreas') return 'andreas';
-    if (rawId === 'lukas') return 'lukas';
-    
+    const id = rawId.toLowerCase();
+    if (id === 'andreas' || id === 'andraes') return 'Andreas';
+    if (id === 'lukas') return 'Lukas';
     return rawId;
 }
 
@@ -456,7 +454,7 @@ mqttClient.on('message', (topic, message) => {
                 const retryLoop = setInterval(async () => {
                     if (!processedEvents.has(eventKey)) { clearInterval(retryLoop); return; }
                     try {
-                        const res = await fetch(`http://${DOUBLE_TAKE_HOST}:32168/api/recognize?id=${objId}`);
+                        const res = await fetch(`http://${DOUBLE_TAKE_HOST}:2323/api/recognize?id=${objId}`);
                         if (res.ok) {
                             console.log(`[PANG-LINK] Knuffat Double-Take för ID: ${objId}`);
                             clearInterval(retryLoop);

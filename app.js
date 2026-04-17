@@ -393,7 +393,9 @@ ipcRenderer.on('frigate-event', async (event, data) => {
             // --- KÖ-HANTERING (RIDDAR-PROTOKOLLET) ---
             // Vi köar den tunga AI-analysen för att inte överbelasta GPU/Ollama.
             window.visionQueue = window.visionQueue.then(async () => {
-                console.log(`[JARVIS-QUEUE] Bearbetar analys för ${camera}...`);
+                console.log(`[JARVIS-QUEUE] Väntar 3s på ansiktsigenkänning (GPU-prio)...`);
+                await new Promise(r => setTimeout(r, 3000)); 
+                console.log(`[JARVIS-QUEUE] Bearbetar nu bildanalys för ${camera}...`);
                 
                 try {
                     const analysis = await vision.analyzeIntruder(snap, label, identity, camera);
