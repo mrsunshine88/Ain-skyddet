@@ -13,7 +13,7 @@ export class Vision {
         this.video = videoElement || null;
         this.canvas = canvasElement;
         this.brain = brain;
-        this.visionModel = 'llama3.2-vision:latest';
+        this.visionModel = 'llama3.2-vision';
         this.isOllamaBusy = false;
         this.activeUser = null;
         this.lastObservedUser = "none";
@@ -464,7 +464,7 @@ REGLER:
 
             const host = window.location.hostname || '127.0.0.1';
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout för moondream
+            const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout för llama3.2-vision
 
             const res = await fetch(`http://${host}:11434/api/chat`, {
                 method: 'POST',
@@ -472,8 +472,15 @@ REGLER:
                 body: JSON.stringify({
                     model: this.visionModel,
                     messages: [
-                        { role: 'user', content: `${reportInstructions}\n\nDATA: Namn: ${identity || 'Okänd'}, Plats: ${camera || 'Utomhus'}. Utför analys nu.`, images: [img] }
+                        { role: 'system', content: 'Du är en säkerhetsvakt som alltid svarar på kortfattad svenska. Inga engelska ord.' },
+                        { role: 'user', content: finalPrompt, images: [img] }
                     ],
+                    options: {
+                        num_predict: 80,
+                        temperature: 0.1,
+                        repeat_penalty: 1.2,
+                        top_p: 0.1
+                    },
                     stream: false
                 }),
                 signal: controller.signal

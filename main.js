@@ -448,7 +448,7 @@ mqttClient.on('message', (topic, message) => {
             
             if (!processedEvents.has(eventKey)) {
                 processedEvents.set(eventKey, true);
-                setTimeout(() => processedEvents.delete(eventKey), 30000); // 30s lås
+                // Permanent ID-spärr: Ingen borttagning av eventKey under sessionen
                 
                 // --- PANG-LÖSNINGEN: KNUFFEN TILL BUDBÄRAREN ---
                 // Vi talar om för Double-Take att det finns en person/bil att identifiera.

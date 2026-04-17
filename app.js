@@ -365,7 +365,7 @@ ipcRenderer.on('frigate-event', async (event, data) => {
     if (window.activeReviews.has(eventKey)) return;
     
     window.activeReviews.add(eventKey);
-    setTimeout(() => window.activeReviews.delete(eventKey), 30000);
+    // Permanent ID-spärr: Ingen borttagning under sessionen (endast en analys per ID)
 
     (async () => {
         // --- FAS 1: ANNONSERING (Sekund 0) ---
